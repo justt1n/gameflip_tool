@@ -1,0 +1,241 @@
+{
+  "site_source": "/Users/admin/code/jobs/universal_price/gfapi/index.js",
+  "observed_source": "/Users/admin/code/jobs/universal_price/gameflip_automation/owned_listings_dump.json",
+  "categories": [
+    {
+      "api_value": "ACCOUNT",
+      "enum_name": null,
+      "comment": "",
+      "source": "observed_only",
+      "observed_count": 1,
+      "sample_names": [
+        "Resident Evil Requiem Standard Game Account"
+      ]
+    },
+    {
+      "api_value": "CONSOLE_VIDEO_GAMES",
+      "enum_name": "GAMES",
+      "comment": "Video games, digital or physical",
+      "source": "gfapi_enum",
+      "observed_count": 0,
+      "sample_names": []
+    },
+    {
+      "api_value": "DIGITAL_INGAME",
+      "enum_name": "INGAME",
+      "comment": "In-game items, digital only",
+      "source": "gfapi_enum",
+      "observed_count": 524,
+      "sample_names": [
+        "Bizarre Lineage > Starter Pack x2",
+        "Sailor Piece - True Aizen + Yamato Bundle  [2349R]",
+        "Sailor Piece - True Aizen + Yamato Bundle  [2349R]",
+        "Sailor Piece - True Aizen + Yamato Bundle  [2349R]",
+        "Sailor Piece - True Aizen + Yamato Bundle  [2349R]"
+      ]
+    },
+    {
+      "api_value": "GIFTCARD",
+      "enum_name": "GIFTCARD",
+      "comment": "Gift cards, digital or physical",
+      "source": "gfapi_enum",
+      "observed_count": 0,
+      "sample_names": []
+    },
+    {
+      "api_value": "TOYS_AND_GAMES",
+      "enum_name": "TOYS",
+      "comment": "Collectibles, physical listing only",
+      "source": "gfapi_enum",
+      "observed_count": 0,
+      "sample_names": []
+    },
+    {
+      "api_value": "UNKNOWN",
+      "enum_name": null,
+      "comment": "",
+      "source": "observed_only",
+      "observed_count": 2,
+      "sample_names": [
+        "Telegram Stars > 350 Stars",
+        "Telegram Stars > 200 Stars"
+      ]
+    },
+    {
+      "api_value": "VIDEO_DVD",
+      "enum_name": "VIDEO",
+      "comment": "Movies, physical or digital",
+      "source": "gfapi_enum",
+      "observed_count": 0,
+      "sample_names": []
+    },
+    {
+      "api_value": "VIDEO_GAME_ACCESSORIES",
+      "enum_name": "ACCESSORIES",
+      "comment": "Console game accessories, physical listing only",
+      "source": "gfapi_enum",
+      "observed_count": 0,
+      "sample_names": []
+    },
+    {
+      "api_value": "VIDEO_GAME_HARDWARE",
+      "enum_name": "CONSOLE",
+      "comment": "Console game hardware, physical listing only",
+      "source": "gfapi_enum",
+      "observed_count": 0,
+      "sample_names": []
+    }
+  ],
+  "aliases": {
+    "accessories": [
+      "VIDEO_GAME_ACCESSORIES"
+    ],
+    "accessory": [
+      "VIDEO_GAME_ACCESSORIES"
+    ],
+    "account": [
+      "ACCOUNT"
+    ],
+    "accounts": [
+      "ACCOUNT"
+    ],
+    "collectible": [
+      "TOYS_AND_GAMES"
+    ],
+    "collectibles": [
+      "TOYS_AND_GAMES"
+    ],
+    "console": [
+      "VIDEO_GAME_HARDWARE"
+    ],
+    "console game": [
+      "CONSOLE_VIDEO_GAMES"
+    ],
+    "console game accessories": [
+      "VIDEO_GAME_ACCESSORIES"
+    ],
+    "console game hardware": [
+      "VIDEO_GAME_HARDWARE"
+    ],
+    "console games": [
+      "CONSOLE_VIDEO_GAMES"
+    ],
+    "console video games": [
+      "CONSOLE_VIDEO_GAMES"
+    ],
+    "consoles": [
+      "VIDEO_GAME_HARDWARE"
+    ],
+    "digital in game": [
+      "DIGITAL_INGAME"
+    ],
+    "digital ingame": [
+      "DIGITAL_INGAME"
+    ],
+    "dvd": [
+      "VIDEO_DVD"
+    ],
+    "dvds": [
+      "VIDEO_DVD"
+    ],
+    "game": [
+      "CONSOLE_VIDEO_GAMES"
+    ],
+    "game account": [
+      "ACCOUNT"
+    ],
+    "game accounts": [
+      "ACCOUNT"
+    ],
+    "game item": [
+      "DIGITAL_INGAME"
+    ],
+    "game items": [
+      "DIGITAL_INGAME"
+    ],
+    "games": [
+      "CONSOLE_VIDEO_GAMES"
+    ],
+    "gift card": [
+      "GIFTCARD"
+    ],
+    "gift cards": [
+      "GIFTCARD"
+    ],
+    "giftcard": [
+      "GIFTCARD"
+    ],
+    "giftcards": [
+      "GIFTCARD"
+    ],
+    "hardware": [
+      "VIDEO_GAME_HARDWARE"
+    ],
+    "in game": [
+      "DIGITAL_INGAME"
+    ],
+    "in game item": [
+      "DIGITAL_INGAME"
+    ],
+    "in game items": [
+      "DIGITAL_INGAME"
+    ],
+    "ingame": [
+      "DIGITAL_INGAME"
+    ],
+    "misc": [
+      "UNKNOWN"
+    ],
+    "movie": [
+      "VIDEO_DVD"
+    ],
+    "movies": [
+      "VIDEO_DVD"
+    ],
+    "other": [
+      "UNKNOWN"
+    ],
+    "others": [
+      "UNKNOWN"
+    ],
+    "toy": [
+      "TOYS_AND_GAMES"
+    ],
+    "toys": [
+      "TOYS_AND_GAMES"
+    ],
+    "toys and games": [
+      "TOYS_AND_GAMES"
+    ],
+    "unknown": [
+      "UNKNOWN"
+    ],
+    "unsupported": [
+      "UNKNOWN"
+    ],
+    "video": [
+      "VIDEO_DVD"
+    ],
+    "video dvd": [
+      "VIDEO_DVD"
+    ],
+    "video game": [
+      "CONSOLE_VIDEO_GAMES"
+    ],
+    "video game accessories": [
+      "VIDEO_GAME_ACCESSORIES"
+    ],
+    "video game accessory": [
+      "VIDEO_GAME_ACCESSORIES"
+    ],
+    "video game hardware": [
+      "VIDEO_GAME_HARDWARE"
+    ],
+    "video games": [
+      "CONSOLE_VIDEO_GAMES"
+    ],
+    "videos": [
+      "VIDEO_DVD"
+    ]
+  }
+}

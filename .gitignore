@@ -1,0 +1,19 @@
+settings.env
+.env
+creds*.json
+__pycache__/
+*.pyc
+.pytest_cache/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+.idea/
+
+# Planning/review markdown generated during implementation work
+/IMPLEMENTATION_PLAN.md
+/PLAN*.md
+/*_PLAN.md
+requireSheet.csv
+docs/

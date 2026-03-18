@@ -56,12 +56,13 @@ class SheetEngine:
         # Parse data rows
         data_rows = all_rows[header_index + 1:]
         sheet_start_row = header_index + 2  # +1 for 0→1-based, +1 to skip header
+        header_row = all_rows[header_index]
 
         payloads = []
         for i, row_data in enumerate(data_rows, start=sheet_start_row):
             if len(row_data) < 2 or row_data[1] not in {'0', '1'}:
                 continue
-            payload = Payload.from_row(row_data, row_index=i)
+            payload = Payload.from_row_with_header(row_data, row_index=i, header_row=header_row)
             if payload and payload.is_check_enabled:
                 payloads.append(payload)
 
@@ -93,6 +94,9 @@ class SheetEngine:
             "stock": payload.stock_location,
             "black_list": payload.blacklist_location,
         }
+        for source in payload.ss_reference_sources():
+            if source["enabled"]:
+                locations[f"{source['label'].lower()}_price"] = source["location"]
 
         # Group ranges by spreadsheet ID
         requests_by_spreadsheet: Dict[str, List[str]] = defaultdict(list)

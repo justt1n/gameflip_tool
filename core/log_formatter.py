@@ -50,10 +50,14 @@ class LogFormatter:
         parts = []
 
         # Target
-        comp_price = analysis.competitive_price
-        comp_name = analysis.competitor_name
+        comp_price = analysis.selected_reference_price
+        comp_name = analysis.selected_reference_name
+        if comp_price is None:
+            comp_price = analysis.competitive_price
+        if comp_name is None:
+            comp_name = analysis.competitor_name
         if comp_price is None or comp_price == float('inf'):
-            comp_name = "Max price"
+            comp_name = "Max price (fallback)"
             comp_price = payload.fetched_max_price
         if comp_name and comp_price is not None:
             parts.append(f"- Targeting: {comp_name} ({comp_price:.3f})\n")
@@ -81,4 +85,3 @@ class LogFormatter:
             parts.append(f"- Top Sellers: {top}\n")
 
         return "".join(parts)
-

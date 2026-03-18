@@ -136,6 +136,58 @@ class TestPayloadFromRow:
         assert payload.stock_location.sheet_id == "sheet_stock_id"
         assert payload.blacklist_location.sheet_id == "sheet_blacklist_id"
 
+    def test_from_row_with_header_maps_new_requirement_layout(self):
+        header = [
+            "2LAI", "CHECK", "Product_name", "Note", "Last Update", "Product_link",
+            "PRODUCT_COMPARE", "Compare mode", "INCLUDE_KEYWORD", "EXCLUDE_KEYWORD",
+            "CATEGORY", "GAME", "DONGIAGIAM_MIN", "DONGIAGIAM_MAX", "DONGIA_LAMTRON",
+            "FEEDBACK", "IDSheet_min", "Sheet_min", "Cell_min",
+        ]
+        row = [
+            "TRUE", "1", "Blade Ball Row", "", "", "5000 Tokens | Blade Ball",
+            "https://gameflip.com/shop/game-items?status=onsale&term=5000%20Token",
+            "2", "5000 Token", "Deluxe", "Game Item", "Blade Ball",
+            "0.001", "0.002", "3", "100", "sheet_min_id", "MinSheet", "A1",
+        ]
+
+        payload = Payload.from_row_with_header(row, row_index=8, header_row=header)
+
+        assert payload is not None
+        assert payload.sheet_schema == "requirement"
+        assert payload.product_link == "5000 Tokens | Blade Ball"
+        assert payload.product_compare == "https://gameflip.com/shop/game-items?status=onsale&term=5000%20Token"
+        assert payload.is_compare_enabled_str == "2"
+        assert payload.include_keyword == "5000 Token"
+        assert payload.exclude_keyword == "Deluxe"
+        assert payload.category_name == "Game Item"
+        assert payload.game_name == "Blade Ball"
+        assert payload.feedback_min == 100
+        assert payload.min_price_adjustment == 0.001
+        assert payload.max_price_adjustment == 0.002
+        assert payload.price_rounding == 3
+
+    def test_from_row_with_header_maps_ss_reference_fields(self):
+        header = [
+            "CHECK", "Product_name", "SS1_CHECK", "SS1_PROFIT", "SS1_HESONHAN",
+            "SS1_QUYDOIDONVI", "SS1_IDSHEET_PRICE", "SS1_SHEET_PRICE", "SS1_CELL_PRICE",
+        ]
+        row = [
+            "1", "Blade Ball Row", "1", "18", "0.85", "0.001",
+            "sheet_ss1", "Prices", "A1",
+        ]
+
+        payload = Payload.from_row_with_header(row, row_index=8, header_row=header)
+
+        assert payload is not None
+        assert payload.ss1_check == "1"
+        assert payload.ss1_profit == 18
+        assert payload.ss1_hesonhan == 0.85
+        assert payload.ss1_quydoidonvi == 0.001
+        sources = payload.ss_reference_sources()
+        assert sources[0]["location"].sheet_id == "sheet_ss1"
+        assert sources[0]["location"].sheet_name == "Prices"
+        assert sources[0]["location"].cell == "A1"
+
 
 class TestPayloadPrepareUpdate:
     def test_prepare_update_generates_correct_ranges(self):

@@ -2,7 +2,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from models.processing_models import CompareTarget
+from models.processing_models import AnalysisResult, CompareTarget
 from models.sheet_models import Payload
 from models.standard_models import PlatformIdentifiers, StandardCompetitorOffer
 
@@ -30,12 +30,15 @@ class PreparedCurrentOffer(BaseModel):
     product_id: str
     price: float
     status: str
+    raw_status: Optional[str] = None
     offer_type: str
     currency: str = "USD"
+    version: Optional[str | int] = None
 
 
 class PreparedCompetition(BaseModel):
     offers: list[StandardCompetitorOffer] = Field(default_factory=list)
+    raw_count: int = 0
 
 
 class PreparedPricingInput(BaseModel):
@@ -58,3 +61,4 @@ class PreparedPricingResult(BaseModel):
     final_price: Optional[CompareTarget] = None
     log_message: Optional[str] = None
     update_command: Optional[PriceUpdateCommand] = None
+    analysis: Optional[AnalysisResult] = None

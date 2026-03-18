@@ -81,6 +81,40 @@ class GameflipClient:
             raw=data,
         )
 
+    async def listing_search_all(
+        self,
+        query: dict[str, Any],
+        max_pages: Optional[int] = None,
+    ) -> GameflipSearchResult:
+        params = dict(query)
+        params["v2"] = True
+
+        listings: list[GameflipListing] = []
+        next_page: Optional[str] = None
+        page_count = 0
+        raw_pages: list[Any] = []
+
+        while True:
+            data, next_page = await self._request(
+                "GET",
+                next_page or "listing",
+                params=None if next_page else params,
+            )
+            raw_pages.append(data)
+            page_items = data if isinstance(data, list) else data.get("listings", [])
+            listings.extend(GameflipListing.model_validate(item) for item in page_items)
+            page_count += 1
+            if not next_page:
+                break
+            if max_pages is not None and page_count >= max_pages:
+                break
+
+        return GameflipSearchResult(
+            listings=listings,
+            next_page=next_page,
+            raw=raw_pages,
+        )
+
     async def list_owned_listings(
         self,
         owner_id: Optional[str] = None,

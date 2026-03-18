@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import signal
 from typing import Dict
 
 from adapters.gameflip_adapter import GameflipAdapter
@@ -19,6 +18,8 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
@@ -56,15 +57,11 @@ async def main():
         pricing_engine=pricing_engine,
         adapter_registry=adapter_registry,
         workers=settings.WORKERS,
-        sleep_time=settings.SLEEP_TIME
+        sleep_time=settings.SLEEP_TIME,
+        target_workers=settings.TARGET_WORKERS,
     )
 
-    # 5. Signal handlers for graceful shutdown
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, orchestrator.stop)
-
-    # 6. Run
+    # 5. Run
     logger.info("Starting Gameflip automation...")
     try:
         await orchestrator.run_forever()

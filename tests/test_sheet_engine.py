@@ -97,6 +97,35 @@ class TestGetPayloads:
         assert len(payloads) == 1
         assert payloads[0].product_name == "Live Product"
 
+    def test_requirement_header_new_layout_maps_compare_mode_and_feedback(self, settings):
+        settings = Settings(
+            MAIN_SHEET_ID="test_sheet_id",
+            MAIN_SHEET_NAME="TestSheet",
+            GOOGLE_KEY_PATH="creds.json",
+            HEADER_KEY_COLUMNS_JSON='["CHECK", "Product_name", "Note"]',
+        )
+        client = MockGoogleSheetsClient(sheet_data=[
+            [
+                "2LAI", "CHECK", "Product_name", "Note", "Last Update", "Product_link",
+                "PRODUCT_COMPARE", "Compare mode", "INCLUDE_KEYWORD", "EXCLUDE_KEYWORD",
+                "CATEGORY", "GAME", "DONGIAGIAM_MIN", "DONGIAGIAM_MAX", "DONGIA_LAMTRON",
+                "FEEDBACK",
+            ],
+            [
+                "TRUE", "1", "Live Product", "", "", "Gems",
+                "https://gameflip.com/shop/game-items?term=gems", "1", "gems", "deluxe",
+                "Game Item", "Pet Simulator 99", "0.01", "0.05", "2", "100",
+            ],
+        ])
+        engine = SheetEngine(client, settings)
+
+        payloads = engine.get_payloads()
+
+        assert len(payloads) == 1
+        assert payloads[0].is_compare_enabled_str == "1"
+        assert payloads[0].feedback_min == 100
+        assert payloads[0].game_name == "Pet Simulator 99"
+
 
 class TestHydrate:
     def test_hydrate_min_max_price(self, settings, hydration_responses):
@@ -155,6 +184,38 @@ class TestHydrate:
             all_ranges.extend(call["ranges"])
         blacklist_ranges = [r for r in all_ranges if "Blacklist" in r]
         assert any("A1:A1000" in r for r in blacklist_ranges)
+
+    def test_hydrate_ss_reference_prices(self, settings):
+        client = MockGoogleSheetsClient(batch_data={"'Prices'!A1": [[10.0]]})
+        engine = SheetEngine(client, settings)
+
+        header = [
+            "CHECK", "Product_name", "SS1_CHECK", "SS1_PROFIT", "SS1_HESONHAN",
+            "SS1_QUYDOIDONVI", "SS1_IDSHEET_PRICE", "SS1_SHEET_PRICE", "SS1_CELL_PRICE",
+        ]
+        row = ["1", "Live Product", "1", "18", "0.85", "0.001", "sheet_ss1", "Prices", "A1"]
+        payload = Payload.from_row_with_header(row, row_index=4, header_row=header)
+
+        hydrated = engine.hydrate_payload(payload)
+
+        assert hydrated.fetched_ss1_price == 10.0
+
+    def test_hydrate_skips_disabled_ss_reference_prices(self, settings):
+        client = MockGoogleSheetsClient(batch_data={"'Prices'!A1": [[10.0]]})
+        engine = SheetEngine(client, settings)
+
+        header = [
+            "CHECK", "Product_name", "SS1_CHECK", "SS1_PROFIT", "SS1_HESONHAN",
+            "SS1_QUYDOIDONVI", "SS1_IDSHEET_PRICE", "SS1_SHEET_PRICE", "SS1_CELL_PRICE",
+        ]
+        row = ["1", "Live Product", "0", "18", "0.85", "0.001", "sheet_ss1", "Prices", "A1"]
+        payload = Payload.from_row_with_header(row, row_index=4, header_row=header)
+
+        hydrated = engine.hydrate_payload(payload)
+
+        assert hydrated.fetched_ss1_price is None
+        requested_ranges = [rng for call in client.batch_get_calls for rng in call["ranges"]]
+        assert "'Prices'!A1" not in requested_ranges
 
 
 class TestBatchWriteLogs:

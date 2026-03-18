@@ -30,7 +30,7 @@ class MockSheetEngine:
         self.written_logs.extend(updates)
 
 
-def _make_orchestrator(payloads, adapter=None, workers=1, hydration=None):
+def _make_orchestrator(payloads, adapter=None, workers=1, hydration=None, target_workers=1):
     sheet_engine = MockSheetEngine(payloads, hydration)
     pricing_engine = PricingEngine(CompetitionAnalyzer(), LogFormatter())
     adapter = adapter or ConfigurableMockAdapter(
@@ -42,6 +42,7 @@ def _make_orchestrator(payloads, adapter=None, workers=1, hydration=None):
         adapter_registry={"mock": adapter},
         workers=workers,
         sleep_time=0,
+        target_workers=target_workers,
     ), sheet_engine, adapter
 
 
@@ -113,7 +114,7 @@ class TestOrchestratorE2E:
         await orch._run_one_round()
         assert len(sheet_eng.written_logs) == 1
         log_note = sheet_eng.written_logs[0][1]["note"]
-        assert "API update failed" in log_note
+        assert "update failed" in log_note
 
     @pytest.mark.asyncio
     async def test_bad_relax_ignored(self):
@@ -196,3 +197,160 @@ class TestOrchestratorE2E:
         note = sheet_eng.written_logs[0][1]["note"]
         assert "[Listing A]" in note
         assert "[Listing B]" in note
+        assert "MULTI_TARGET (2)" in note
+
+    @pytest.mark.asyncio
+    async def test_multi_target_note_groups_identical_bodies(self):
+        grouped = Orchestrator._compile_target_notes([
+            "[Listing] Listing A\nUPDATE\n[18/03 21:47] Updated (no comparison): 12.000\n- Competitors: 0",
+            "[Listing] Listing B\nUPDATE\n[18/03 21:48] Updated (no comparison): 12.000\n- Competitors: 0",
+        ])
+
+        assert "MULTI_TARGET (2)" in grouped
+        assert "GROUP 1" not in grouped
+        assert "- Listings: [Listing A]; [Listing B]" in grouped
+
+    @pytest.mark.asyncio
+    async def test_targets_can_run_concurrently(self):
+        class SlowExpandingAdapter(ConfigurableMockAdapter):
+            async def resolve_payload_targets(self, payload):
+                targets = []
+                for idx in range(3):
+                    payload_copy = payload.model_copy(
+                        update={
+                            "resolved_listing_id": f"listing-{idx}",
+                            "resolved_listing_name": f"Listing {idx}",
+                        },
+                        deep=True,
+                    )
+                    targets.append(
+                        ResolvedListingTarget(
+                            payload=payload_copy,
+                            listing_id=f"listing-{idx}",
+                            listing_name=f"Listing {idx}",
+                        )
+                    )
+                return targets
+
+            async def prepare_pricing_input(self, target: ResolvedListingTarget) -> PreparedPricingInput:
+                await asyncio.sleep(0.05)
+                return make_prepared_input(
+                    target.payload,
+                    my_price=self.my_price,
+                    competitors=self.competitors,
+                    offer_id=target.listing_id,
+                    product_id=f"prod-{target.listing_id}",
+                    platform=self.platform,
+                )
+
+            async def update_price(self, offer_id: str, new_price: float, current_version=None, current_status=None) -> bool:
+                await asyncio.sleep(0.05)
+                return await super().update_price(
+                    offer_id,
+                    new_price,
+                    current_version=current_version,
+                    current_status=current_status,
+                )
+
+        payload = make_payload(
+            fetched_min=12.0,
+            fetched_max=18.0,
+            inline_min_price="12.0",
+            min_adj=0.01,
+            max_adj=0.05,
+        )
+        adapter = SlowExpandingAdapter(
+            competitors=[StandardCompetitorOffer(seller_name="rival", price=14.20, is_eligible=True)]
+        )
+        orch, sheet_eng, _ = _make_orchestrator(
+            [payload],
+            adapter=adapter,
+            target_workers=3,
+        )
+
+        started = time.perf_counter()
+        await orch._run_one_round()
+        elapsed = time.perf_counter() - started
+
+        assert len(sheet_eng.written_logs) == 1
+        assert elapsed < 0.25
+
+    @pytest.mark.asyncio
+    async def test_mode_zero_skips_when_target_already_matches_current_price(self):
+        payload = make_payload(
+            compare_mode="0",
+            fetched_min=12.0,
+            inline_min_price="12.0",
+        )
+        adapter = ConfigurableMockAdapter(my_price=12.0)
+        orch, sheet_eng, _ = _make_orchestrator([payload], adapter=adapter)
+
+        await orch._run_one_round()
+
+        assert len(sheet_eng.written_logs) == 1
+        assert len(adapter.updated_prices) == 0
+        note = sheet_eng.written_logs[0][1]["note"]
+        assert "SKIP" in note
+        assert "Compare Mode: 0 | Feedback Min: N/A | Raw Hits: skipped | After Filters: skipped" in note
+        assert "Competitors: skipped (Mode 0 / No Compare)" in note
+
+    @pytest.mark.asyncio
+    async def test_compare_note_includes_feedback_and_raw_hit_counts(self):
+        class RawCountAdapter(ConfigurableMockAdapter):
+            async def prepare_pricing_input(self, target: ResolvedListingTarget) -> PreparedPricingInput:
+                prepared = await super().prepare_pricing_input(target)
+                prepared.competition.raw_count = 39
+                return prepared
+
+        payload = make_payload(
+            fetched_min=12.0,
+            fetched_max=18.0,
+            inline_min_price="12.0",
+            min_adj=0.01,
+            max_adj=0.05,
+        )
+        payload.feedback_min = 100
+        adapter = RawCountAdapter(
+            competitors=[StandardCompetitorOffer(seller_name=f"rival-{idx}", price=14.20 + idx, is_eligible=True) for idx in range(12)]
+        )
+        orch, sheet_eng, _ = _make_orchestrator([payload], adapter=adapter)
+
+        await orch._run_one_round()
+
+        assert len(sheet_eng.written_logs) == 1
+        note = sheet_eng.written_logs[0][1]["note"]
+        assert "Compare Mode: 1 | Feedback Min: 100 | Raw Hits: 39 | After Filters: 12" in note
+        assert "Competitors: 12" in note
+
+    @pytest.mark.asyncio
+    async def test_compare_note_after_filters_respects_blacklist(self):
+        class RawCountAdapter(ConfigurableMockAdapter):
+            async def prepare_pricing_input(self, target: ResolvedListingTarget) -> PreparedPricingInput:
+                prepared = await super().prepare_pricing_input(target)
+                prepared.competition.raw_count = 39
+                return prepared
+
+        payload = make_payload(
+            fetched_min=12.0,
+            fetched_max=18.0,
+            inline_min_price="12.0",
+            min_adj=0.01,
+            max_adj=0.05,
+        )
+        payload.fetched_black_list = ["rival-0"]
+        adapter = RawCountAdapter(
+            competitors=[
+                StandardCompetitorOffer(seller_name="rival-0", price=14.20, is_eligible=True),
+                StandardCompetitorOffer(seller_name="rival-1", price=14.40, is_eligible=True),
+                StandardCompetitorOffer(seller_name="rival-2", price=14.60, is_eligible=True),
+            ]
+        )
+        orch, sheet_eng, _ = _make_orchestrator([payload], adapter=adapter)
+
+        await orch._run_one_round()
+
+        assert len(sheet_eng.written_logs) == 1
+        note = sheet_eng.written_logs[0][1]["note"]
+        assert "Compare Mode: 1 | Feedback Min: N/A | Raw Hits: 39 | After Filters: 2" in note
+        assert "Competitors: 2" in note
+        assert "Best Price Found: 14.400" in note

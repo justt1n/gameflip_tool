@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     GOOGLE_KEY_PATH: str
     HEADER_KEY_COLUMNS_JSON: str = '["CHECK", "Product_name", "Product_pack"]'
     WORKERS: int = 1
+    TARGET_WORKERS: int = 1
     SLEEP_TIME: int = 5
     GAMEFLIP_API_KEY: str = ""
     GAMEFLIP_API_SECRET: str = ""

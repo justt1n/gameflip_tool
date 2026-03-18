@@ -71,7 +71,7 @@ class TestCompetitionAnalyzer:
         result = analyzer.analyze(_make_payload(), offers)
         assert result.competitive_price is None
         assert result.competitor_name is None
-        assert len(result.top_sellers_for_log) == 2
+        assert result.top_sellers_for_log == []
 
     def test_sellers_below_min_identified(self, analyzer):
         offers = [
@@ -94,7 +94,7 @@ class TestCompetitionAnalyzer:
         assert result.competitor_name == "A"
         assert len(result.top_sellers_for_log) == 2
 
-    def test_top_sellers_sorted_eligible_first(self, analyzer):
+    def test_top_sellers_only_include_eligible_offers(self, analyzer):
         offers = [
             StandardCompetitorOffer(seller_name="Ineligible", price=5.00, is_eligible=False),
             StandardCompetitorOffer(seller_name="Eligible1", price=14.00, is_eligible=True),
@@ -104,5 +104,4 @@ class TestCompetitionAnalyzer:
         log_names = [o.seller_name for o in result.top_sellers_for_log]
         assert log_names[0] == "Eligible2"
         assert log_names[1] == "Eligible1"
-        assert log_names[2] == "Ineligible"
-
+        assert "Ineligible" not in log_names

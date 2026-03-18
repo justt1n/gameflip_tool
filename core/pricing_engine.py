@@ -4,6 +4,7 @@ from typing import Optional
 
 from core.competition_analyzer import CompetitionAnalyzer
 from core.log_formatter import LogFormatter
+from core.reference_price_selector import ReferencePriceSelector
 from models.processing_models import CompareTarget, AnalysisResult
 from models.runtime_models import PreparedPricingInput, PreparedPricingResult, PriceUpdateCommand
 from models.sheet_models import Payload
@@ -20,6 +21,7 @@ class PricingEngine:
     def __init__(self, analyzer: CompetitionAnalyzer, log_formatter: LogFormatter):
         self.analyzer = analyzer
         self.log_formatter = log_formatter
+        self.reference_price_selector = ReferencePriceSelector()
 
     async def process(self, prepared: PreparedPricingInput) -> PreparedPricingResult:
         payload = prepared.payload
@@ -35,11 +37,23 @@ class PricingEngine:
         analysis = None
         if prepared.competition.offers:
             analysis = self.analyzer.analyze(payload, prepared.competition.offers)
-            target = self._calc_final_price(payload, analysis.competitive_price)
-            competitor_name = analysis.competitor_name or "No Competition"
         else:
-            target = self._calc_final_price(payload, None)
-            competitor_name = "No Competition"
+            analysis = AnalysisResult()
+
+        selected_reference = self.reference_price_selector.select_best_price(payload, analysis.competitive_price)
+        if selected_reference is not None:
+            analysis.selected_reference_name = (
+                analysis.competitor_name
+                if selected_reference.source_name == "Competition"
+                else selected_reference.source_name
+            )
+            analysis.selected_reference_price = selected_reference.price
+
+        target = self._calc_final_price(
+            payload,
+            competitor_price=selected_reference.price if selected_reference is not None else None,
+        )
+        competitor_name = analysis.selected_reference_name or analysis.competitor_name or "No Competition"
 
         min_price_val = payload.fetched_min_price
         if min_price_val is None:
@@ -48,7 +62,8 @@ class PricingEngine:
         if min_price_val is None:
             return PreparedPricingResult(
                 status=0, payload=payload, target=prepared.target,
-                log_message=self.log_formatter.format("no_min_price", payload, target, analysis)
+                log_message=self.log_formatter.format("no_min_price", payload, target, analysis),
+                analysis=analysis,
             )
 
         if payload.current_price < min_price_val:
@@ -58,7 +73,8 @@ class PricingEngine:
         if target < min_price_val:
             return PreparedPricingResult(
                 status=0, payload=payload, target=prepared.target,
-                log_message=self.log_formatter.format("below_min", payload, target, analysis)
+                log_message=self.log_formatter.format("below_min", payload, target, analysis),
+                analysis=analysis,
             )
 
         if mode == 1:
@@ -119,6 +135,12 @@ class PricingEngine:
         target = round_up_to_n_decimals(min_price_val, rounding)
         payload.applied_adj = 0.0
 
+        if not self._is_significant(payload.current_price, target, payload):
+            return PreparedPricingResult(
+                status=2, payload=payload, target=prepared.target,
+                log_message=self.log_formatter.format("equal", payload, payload.current_price),
+            )
+
         return PreparedPricingResult(
             status=1, payload=payload, target=prepared.target,
             final_price=CompareTarget(name="No Comparison", price=target),
@@ -141,12 +163,14 @@ class PricingEngine:
         if not self._is_significant(payload.current_price, target, payload):
             return PreparedPricingResult(
                 status=2, payload=payload, target=prepared.target,
-                log_message=self.log_formatter.format("equal", payload, payload.current_price, analysis)
+                log_message=self.log_formatter.format("equal", payload, payload.current_price, analysis),
+                analysis=analysis,
             )
         return PreparedPricingResult(
             status=1, payload=payload, target=prepared.target,
             final_price=CompareTarget(name=comp_name, price=target),
             log_message=self.log_formatter.format("compare", payload, target, analysis),
+            analysis=analysis,
             update_command=PriceUpdateCommand(
                 offer_id=prepared.current_offer.offer_id,
                 new_price=target,
@@ -167,17 +191,20 @@ class PricingEngine:
             msg = msg.replace("matches target", "already below target (Mode 2 — Hold)")
             return PreparedPricingResult(
                 status=2, payload=payload, target=prepared.target,
-                log_message=msg
+                log_message=msg,
+                analysis=analysis,
             )
         if not self._is_significant(payload.current_price, target, payload):
             return PreparedPricingResult(
                 status=2, payload=payload, target=prepared.target,
-                log_message=self.log_formatter.format("equal", payload, payload.current_price, analysis)
+                log_message=self.log_formatter.format("equal", payload, payload.current_price, analysis),
+                analysis=analysis,
             )
         return PreparedPricingResult(
             status=1, payload=payload, target=prepared.target,
             final_price=CompareTarget(name=comp_name, price=target),
             log_message=self.log_formatter.format("compare", payload, target, analysis),
+            analysis=analysis,
             update_command=PriceUpdateCommand(
                 offer_id=prepared.current_offer.offer_id,
                 new_price=target,

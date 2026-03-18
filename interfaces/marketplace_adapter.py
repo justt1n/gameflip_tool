@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from typing import Optional
 
 from models.runtime_models import PreparedPricingInput, ResolvedListingTarget
 
@@ -19,7 +20,13 @@ class IMarketplaceAdapter(ABC):
         ...
 
     @abstractmethod
-    async def update_price(self, offer_id: str, new_price: float) -> bool:
+    async def update_price(
+        self,
+        offer_id: str,
+        new_price: float,
+        current_version: Optional[str | int] = None,
+        current_status: Optional[str] = None,
+    ) -> bool:
         """Apply the final calculated price to the marketplace listing."""
         ...
 

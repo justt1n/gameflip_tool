@@ -30,16 +30,13 @@ class CompetitionAnalyzer:
             return AnalysisResult(
                 competitor_name=None,
                 competitive_price=None,
-                top_sellers_for_log=offers,
+                top_sellers_for_log=[],
                 sellers_below_min=[]
             )
 
         # Find lowest eligible
         valid = [o for o in non_blacklisted if o.is_eligible]
-        sorted_for_log = sorted(
-            non_blacklisted,
-            key=lambda x: (not x.is_eligible, x.price)
-        )
+        sorted_for_log = sorted(valid, key=lambda x: x.price)
 
         competitor_name = None
         competitive_price = None
@@ -62,4 +59,3 @@ class CompetitionAnalyzer:
             top_sellers_for_log=sorted_for_log,
             sellers_below_min=sellers_below_min
         )
-

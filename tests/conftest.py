@@ -303,13 +303,20 @@ class ConfigurableMockAdapter(IMarketplaceAdapter):
                 product_id="prod_001",
                 price=self.my_price,
                 status=self.my_status,
+                raw_status=self.my_status,
                 offer_type="key",
                 currency="USD",
             ),
             competition=PreparedCompetition(offers=self.competitors),
         )
 
-    async def update_price(self, offer_id: str, new_price: float) -> bool:
+    async def update_price(
+        self,
+        offer_id: str,
+        new_price: float,
+        current_version=None,
+        current_status=None,
+    ) -> bool:
         self.updated_prices.append({"offer_id": offer_id, "price": new_price})
         return self.update_succeeds
 
@@ -399,6 +406,7 @@ def make_prepared_input(
             product_id=product_id,
             price=my_price,
             status=status,
+            raw_status=status,
             offer_type=offer_type,
             currency="USD",
         ),

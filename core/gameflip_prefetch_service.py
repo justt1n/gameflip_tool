@@ -1,10 +1,18 @@
+import asyncio
+import re
+import time
 from typing import Any, Optional
+from urllib.parse import parse_qs, urlparse
 
 from clients.gameflip_client import GameflipClient
 from constants.gameflip_constants import (
     GAMEFLIP_ACTIVE_STATUSES,
     GAMEFLIP_DEFAULT_SEARCH_SORT,
     GAMEFLIP_PAUSED_STATUSES,
+    normalize_category,
+    normalize_platform,
+    normalize_shop_category_slug,
+    normalize_status,
 )
 from models.gameflip_models import GameflipListing
 from models.runtime_models import (
@@ -20,6 +28,11 @@ from utils.price_utils import cents_to_usd_decimal
 class GameflipPrefetchService:
     def __init__(self, client: GameflipClient):
         self.client = client
+        self._search_cache: dict[tuple, tuple[float, asyncio.Task]] = {}
+        self._search_cache_lock = asyncio.Lock()
+        self._search_cache_ttl_seconds = 5.0
+        self._seller_name_cache: dict[str, str] = {}
+        self._seller_name_lock = asyncio.Lock()
 
     async def prepare_pricing_input(self, target: ResolvedListingTarget) -> PreparedPricingInput:
         listing = await self.client.listing_get(target.listing_id)
@@ -29,15 +42,24 @@ class GameflipPrefetchService:
 
         if target.payload.compare_mode > 0:
             owner_id = listing.owner or await self.client.get_owner_id()
-            search_result = await self.client.listing_search(self._build_search_query(listing))
+            search_result = await self._listing_search_cached(self._build_search_query(listing, target.payload))
+            seller_names = await self._resolve_seller_names(search_result.listings)
+            normalized_offers = self._normalize_competitors(
+                search_result.listings,
+                current_listing=listing,
+                owner_id=owner_id,
+                min_price=target.payload.fetched_min_price,
+                max_price=target.payload.fetched_max_price,
+                include_keywords=self._split_keywords(target.payload.include_keyword),
+                exclude_keywords=self._split_keywords(
+                    target.payload.exclude_keyword or target.payload.filter_options
+                ),
+                feedback_min=target.payload.feedback_min,
+                seller_names=seller_names,
+            )
             competition = PreparedCompetition(
-                offers=self._normalize_competitors(
-                    search_result.listings,
-                    current_listing=listing,
-                    owner_id=owner_id,
-                    min_price=target.payload.fetched_min_price,
-                    max_price=target.payload.fetched_max_price,
-                )
+                offers=normalized_offers,
+                raw_count=len(search_result.listings),
             )
 
         prepared_payload = target.payload.model_copy(
@@ -75,9 +97,35 @@ class GameflipPrefetchService:
             product_id=product_id,
             price=cents_to_usd_decimal(listing.price),
             status=self._normalize_status(listing.status),
+            raw_status=(listing.status or "").lower() or None,
             offer_type=self._infer_offer_type(listing),
             currency="USD",
+            version=listing.version,
         )
+
+    async def _listing_search_cached(self, query: dict[str, Any]):
+        key = tuple(sorted((name, self._cacheable_value(value)) for name, value in query.items()))
+        now = time.monotonic()
+
+        async with self._search_cache_lock:
+            cached = self._search_cache.get(key)
+            if cached and now - cached[0] <= self._search_cache_ttl_seconds:
+                task = cached[1]
+            else:
+                if hasattr(self.client, "listing_search_all"):
+                    task = asyncio.create_task(self.client.listing_search_all(dict(query)))
+                else:
+                    task = asyncio.create_task(self.client.listing_search(dict(query)))
+                self._search_cache[key] = (now, task)
+
+        try:
+            return await task
+        except Exception:
+            async with self._search_cache_lock:
+                cached = self._search_cache.get(key)
+                if cached and cached[1] is task:
+                    self._search_cache.pop(key, None)
+            raise
 
     def _normalize_competitors(
         self,
@@ -86,6 +134,10 @@ class GameflipPrefetchService:
         owner_id: str,
         min_price: Optional[float],
         max_price: Optional[float],
+        include_keywords: list[str],
+        exclude_keywords: list[str],
+        feedback_min: Optional[float],
+        seller_names: dict[str, str],
     ) -> list[StandardCompetitorOffer]:
         offers: list[StandardCompetitorOffer] = []
         for listing in listings:
@@ -96,6 +148,16 @@ class GameflipPrefetchService:
             if (listing.status or "").lower() != "onsale":
                 continue
             if listing.price is None:
+                continue
+            if include_keywords and not any(
+                self._phrase_matches(listing.name or "", keyword) for keyword in include_keywords
+            ):
+                continue
+            if exclude_keywords and any(
+                self._phrase_matches(listing.name or "", keyword) for keyword in exclude_keywords
+            ):
+                continue
+            if feedback_min is not None and (listing.seller_ratings or 0) <= feedback_min:
                 continue
 
             price = cents_to_usd_decimal(listing.price)
@@ -110,8 +172,9 @@ class GameflipPrefetchService:
 
             offers.append(
                 StandardCompetitorOffer(
-                    seller_name=self._seller_name(listing),
+                    seller_name=self._seller_name(listing, seller_names),
                     price=price,
+                    rating=listing.seller_ratings or 0,
                     is_eligible=is_eligible,
                     note=note,
                 )
@@ -140,12 +203,15 @@ class GameflipPrefetchService:
             "product_key": product_key,
         }
 
-    @staticmethod
-    def _build_search_query(listing: GameflipListing) -> dict[str, Any]:
+    def _build_search_query(self, listing: GameflipListing, payload) -> dict[str, Any]:
+        compare_query = self._parse_compare_query(payload)
+        if compare_query:
+            return compare_query
+
         query: dict[str, Any] = {
             "status": "onsale",
             "sort": GAMEFLIP_DEFAULT_SEARCH_SORT,
-            "limit": 50,
+            "limit": 100,
         }
         if listing.category:
             query["category"] = listing.category
@@ -157,6 +223,8 @@ class GameflipPrefetchService:
             query["platform"] = listing.platform
         if listing.tags:
             query["tags"] = "^".join(listing.tags)
+        elif payload.game_name and (query.get("platform") or "").lower() == "roblox":
+            query["tags"] = f"roblox_game: {payload.game_name}"
         return query
 
     @staticmethod
@@ -178,6 +246,155 @@ class GameflipPrefetchService:
             return "account"
         return "gift"
 
+    async def _resolve_seller_names(self, listings: list[GameflipListing]) -> dict[str, str]:
+        owner_ids = {
+            listing.owner
+            for listing in listings
+            if listing.owner
+        }
+        missing_owner_ids: list[str] = []
+
+        async with self._seller_name_lock:
+            for owner_id in owner_ids:
+                if owner_id not in self._seller_name_cache:
+                    missing_owner_ids.append(owner_id)
+
+        if missing_owner_ids:
+            resolved = await asyncio.gather(
+                *(self._fetch_seller_name(owner_id) for owner_id in missing_owner_ids),
+                return_exceptions=True,
+            )
+            async with self._seller_name_lock:
+                for owner_id, value in zip(missing_owner_ids, resolved):
+                    if isinstance(value, Exception):
+                        self._seller_name_cache[owner_id] = self._fallback_owner_name(owner_id)
+                    else:
+                        self._seller_name_cache[owner_id] = value
+
+        async with self._seller_name_lock:
+            return {
+                owner_id: self._seller_name_cache[owner_id]
+                for owner_id in owner_ids
+                if owner_id in self._seller_name_cache
+            }
+
+    async def _fetch_seller_name(self, owner_id: str) -> str:
+        profile = await self.client.profile_get(owner_id)
+        display_name = (profile.display_name or "").strip()
+        if display_name:
+            return display_name
+        return self._fallback_owner_name(owner_id)
+
     @staticmethod
-    def _seller_name(listing: GameflipListing) -> str:
-        return listing.owner or f"gameflip:{listing.id}"
+    def _fallback_owner_name(owner_id: str) -> str:
+        if ":" in owner_id:
+            return owner_id.split(":", 1)[1]
+        return owner_id
+
+    @classmethod
+    def _seller_name(cls, listing: GameflipListing, seller_names: dict[str, str]) -> str:
+        if listing.owner and listing.owner in seller_names:
+            return seller_names[listing.owner]
+        if listing.owner:
+            return cls._fallback_owner_name(listing.owner)
+        return f"gameflip:{listing.id}"
+
+    @staticmethod
+    def _cacheable_value(value: Any):
+        if isinstance(value, list):
+            return tuple(value)
+        return value
+
+    @staticmethod
+    def _parse_compare_query(payload) -> dict[str, Any]:
+        product_compare = (payload.product_compare or "").strip()
+        if not product_compare:
+            return {}
+
+        if product_compare.startswith("http"):
+            parsed = urlparse(product_compare)
+            if "gameflip.com" not in (parsed.netloc or ""):
+                return {}
+
+            query = parse_qs(parsed.query)
+            path_slug = parsed.path.rstrip("/").split("/")[-1]
+            result: dict[str, Any] = {
+                "status": normalize_status(GameflipPrefetchService._first(query, "status")) or "onsale",
+                "sort": GameflipPrefetchService._first(query, "sort") or GAMEFLIP_DEFAULT_SEARCH_SORT,
+                "limit": int(GameflipPrefetchService._first(query, "limit") or 100),
+            }
+
+            term = GameflipPrefetchService._first(query, "term")
+            platform = normalize_platform(GameflipPrefetchService._first(query, "platform"))
+            category = normalize_category((payload.category_name or "").strip()) or normalize_shop_category_slug(path_slug)
+            tags = GameflipPrefetchService._first(query, "tags")
+            if not tags and payload.game_name and (platform or "").lower() == "roblox":
+                tags = f"roblox_game: {payload.game_name}"
+
+            if term:
+                result["term"] = term
+            if platform:
+                result["platform"] = platform
+            if category:
+                result["category"] = category
+            if tags:
+                result["tags"] = tags
+            return result
+
+        return {
+            "status": "onsale",
+            "sort": GAMEFLIP_DEFAULT_SEARCH_SORT,
+            "limit": 100,
+            "term": product_compare,
+            **(
+                {"tags": f"roblox_game: {payload.game_name}"}
+                if payload.game_name else {}
+            ),
+        }
+
+    @staticmethod
+    def _first(query: dict[str, list[str]], key: str) -> Optional[str]:
+        values = query.get(key) or []
+        return values[0] if values else None
+
+    @staticmethod
+    def _split_keywords(value: Optional[str]) -> list[str]:
+        if not value:
+            return []
+        normalized = value.replace(";", ",")
+        return [item.strip().lower() for item in normalized.split(",") if item.strip()]
+
+    @classmethod
+    def _phrase_matches(cls, text: str, phrase: Optional[str]) -> bool:
+        if not phrase:
+            return True
+        haystack = cls._tokenize(text)
+        needle = cls._tokenize(phrase)
+        if not needle:
+            return False
+        if len(needle) > len(haystack):
+            return False
+
+        for index in range(len(haystack) - len(needle) + 1):
+            window = haystack[index:index + len(needle)]
+            if all(cls._tokens_match(query, current) for query, current in zip(needle, window)):
+                return True
+        return False
+
+    @staticmethod
+    def _tokenize(value: str) -> list[str]:
+        return re.findall(r"[a-z0-9]+", (value or "").lower())
+
+    @classmethod
+    def _tokens_match(cls, query_token: str, text_token: str) -> bool:
+        if query_token.isdigit() or text_token.isdigit():
+            return query_token == text_token
+        return cls._normalize_word(query_token) == cls._normalize_word(text_token)
+
+    @staticmethod
+    def _normalize_word(value: str) -> str:
+        if value.endswith("ies") and len(value) > 3:
+            return value[:-3] + "y"
+        if value.endswith("s") and len(value) > 3:
+            return value[:-1]
+        return value

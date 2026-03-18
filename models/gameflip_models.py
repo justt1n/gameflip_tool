@@ -52,6 +52,7 @@ class GameflipListing(BaseModel):
     digital: Optional[bool] = None
     digital_fee: Optional[int] = None
     commission: Optional[int] = None
+    seller_ratings: Optional[int] = None
     shipping_paid_by: Optional[str] = None
     shipping_fee: Optional[int] = None
     tags: List[str] = Field(default_factory=list)

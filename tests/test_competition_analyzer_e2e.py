@@ -32,7 +32,7 @@ class TestCompetitionAnalyzerE2E:
         p = make_payload()
         result = analyzer.analyze(p, competitors_all_ineligible)
         assert result.competitive_price is None
-        assert len(result.top_sellers_for_log) == 2
+        assert result.top_sellers_for_log == []
 
     def test_single_rival(self, analyzer, competitors_single_rival):
         p = make_payload()
@@ -53,4 +53,3 @@ class TestCompetitionAnalyzerE2E:
         eligible = [o for o in result.top_sellers_for_log if o.is_eligible]
         for i in range(len(eligible) - 1):
             assert eligible[i].price <= eligible[i + 1].price
-

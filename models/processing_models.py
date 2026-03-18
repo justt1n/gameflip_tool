@@ -16,6 +16,8 @@ class AnalysisResult(BaseModel):
     competitive_price: Optional[float] = None
     top_sellers_for_log: Optional[List[StandardCompetitorOffer]] = None
     sellers_below_min: Optional[List[StandardCompetitorOffer]] = None
+    selected_reference_name: Optional[str] = None
+    selected_reference_price: Optional[float] = None
 
 
 class ProcessingResult(BaseModel):
@@ -34,4 +36,3 @@ class ProcessingResult(BaseModel):
     offer_id: Optional[str] = None
     offer_type: Optional[str] = None
     competition: Optional[List[StandardCompetitorOffer]] = None
-

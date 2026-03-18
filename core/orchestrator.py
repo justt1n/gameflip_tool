@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from datetime import datetime
 from typing import Dict, Optional, Tuple
 
@@ -30,14 +31,15 @@ class Orchestrator:
         pricing_engine: PricingEngine,
         adapter_registry: Dict[str, IMarketplaceAdapter],
         workers: int = 1,
-        sleep_time: int = 5
+        sleep_time: int = 5,
+        target_workers: int = 1,
     ):
         self.sheet_engine = sheet_engine
         self.pricing_engine = pricing_engine
         self.adapter_registry = adapter_registry
         self.workers = workers
         self.sleep_time = sleep_time
-        self._running = True
+        self.target_workers = max(1, target_workers)
 
     def detect_platform(self, *values: str) -> str:
         """
@@ -70,7 +72,7 @@ class Orchestrator:
 
     async def run_forever(self):
         """Main infinite loop with error recovery."""
-        while self._running:
+        while True:
             try:
                 logger.info("===== NEW ROUND =====")
                 await self._run_one_round()
@@ -150,19 +152,11 @@ class Orchestrator:
 
             # 4. Run pricing engine and updates for each resolved listing
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            note_chunks = []
-            for target in resolved_targets:
-                note = await self._process_resolved_target(target, adapter, payload)
-                if len(resolved_targets) > 1:
-                    label = (
-                        target.listing_name
-                        or target.listing_id
-                    )
-                    note = f"[{label}] {note}"
-                note_chunks.append(note)
+            note_chunks = await self._process_resolved_targets(resolved_targets, adapter, payload)
+            final_note = self._compile_target_notes(note_chunks)
 
             log_data = {
-                'note': "\n\n".join(note_chunks),
+                'note': final_note,
                 'last_update': timestamp
             }
 
@@ -184,16 +178,27 @@ class Orchestrator:
                 'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             })
 
-    def stop(self):
-        """Signal the orchestrator to stop after current round."""
-        self._running = False
-
     async def _expand_payloads(
         self,
         payload: Payload,
         adapter: IMarketplaceAdapter,
     ) -> list[ResolvedListingTarget]:
         return await adapter.resolve_payload_targets(payload)
+
+    async def _process_resolved_targets(
+        self,
+        resolved_targets: list[ResolvedListingTarget],
+        adapter: IMarketplaceAdapter,
+        original_payload: Payload,
+    ) -> list[str]:
+        semaphore = asyncio.Semaphore(self.target_workers)
+
+        async def run_target(target: ResolvedListingTarget) -> str:
+            async with semaphore:
+                return await self._process_resolved_target(target, adapter, original_payload)
+
+        tasks = [run_target(target) for target in resolved_targets]
+        return await asyncio.gather(*tasks)
 
     async def _process_resolved_target(
         self,
@@ -203,15 +208,173 @@ class Orchestrator:
     ) -> str:
         prepared = await adapter.prepare_pricing_input(target)
         result = await self.pricing_engine.process(prepared)
+        display_offers = prepared.competition.offers
+        if result.analysis is not None and result.analysis.top_sellers_for_log is not None:
+            display_offers = result.analysis.top_sellers_for_log
+
+        competitor_count = len(display_offers)
+        raw_competitor_count = prepared.competition.raw_count
+        best_price = min((offer.price for offer in display_offers), default=None)
+        base_log = result.log_message or "INFO\nNo log message"
+        compare_enabled = target.payload.compare_mode > 0
+
         if result.status == 1 and result.final_price and result.update_command:
             success = await adapter.update_price(
                 offer_id=result.update_command.offer_id,
                 new_price=result.update_command.new_price,
+                current_version=prepared.current_offer.version,
+                current_status=prepared.current_offer.raw_status,
             )
             if success:
                 logger.info(
                     f"SUCCESS: {original_payload.product_name} -> {result.final_price.price:.3f}"
                 )
-                return result.log_message or "Updated successfully"
-            return f"{result.log_message}\n\nERROR: API update failed."
-        return result.log_message or "No log message"
+                return self._build_audit_note(
+                    target=target,
+                    base_log=base_log,
+                    competitors=competitor_count,
+                    raw_competitors=raw_competitor_count,
+                    best_price=best_price,
+                    edited=True,
+                    final_price=result.final_price.price,
+                    compare_enabled=compare_enabled,
+                )
+            return self._build_audit_note(
+                target=target,
+                base_log=base_log,
+                competitors=competitor_count,
+                raw_competitors=raw_competitor_count,
+                best_price=best_price,
+                edited=False,
+                final_price=result.final_price.price,
+                reason="update failed",
+                compare_enabled=compare_enabled,
+            )
+
+        reason = "no change" if result.status == 2 else "skip"
+        return self._build_audit_note(
+            target=target,
+            base_log=base_log,
+            competitors=competitor_count,
+            raw_competitors=raw_competitor_count,
+            best_price=best_price,
+            edited=False,
+            final_price=result.final_price.price if result.final_price else None,
+            reason=reason,
+            compare_enabled=compare_enabled,
+        )
+
+    @staticmethod
+    def _build_audit_note(
+        target: ResolvedListingTarget,
+        base_log: str,
+        competitors: int,
+        raw_competitors: int,
+        best_price: Optional[float],
+        edited: bool,
+        final_price: Optional[float] = None,
+        reason: Optional[str] = None,
+        compare_enabled: bool = True,
+    ) -> str:
+        item_label = target.listing_name or target.listing_id
+        best_text = f"{best_price:.3f}" if best_price is not None else "N/A"
+        final_text = f"{final_price:.3f}" if final_price is not None else "N/A"
+        action = "EDIT" if edited else "NO_EDIT"
+
+        parts = [
+            f"[Listing] {item_label}",
+            base_log.rstrip(),
+            Orchestrator._build_compare_meta_line(
+                compare_mode=target.payload.compare_mode,
+                feedback_min=target.payload.feedback_min,
+                raw_competitors=raw_competitors,
+                competitors=competitors,
+                compare_enabled=compare_enabled,
+            ),
+            f"- Best Price Found: {best_text}",
+            f"- Final Price: {final_text}",
+            f"- Action: {action}",
+        ]
+        if compare_enabled:
+            parts.insert(3, f"- Competitors: {competitors}")
+        else:
+            parts.insert(3, "- Competitors: skipped (Mode 0 / No Compare)")
+        if reason:
+            parts.append(f"- Reason: {reason}")
+        return "\n".join(parts)
+
+    @staticmethod
+    def _build_compare_meta_line(
+        compare_mode: int,
+        feedback_min: Optional[float],
+        raw_competitors: int,
+        competitors: int,
+        compare_enabled: bool,
+    ) -> str:
+        feedback_text = (
+            str(int(feedback_min))
+            if feedback_min is not None and float(feedback_min).is_integer()
+            else (f"{feedback_min}" if feedback_min is not None else "N/A")
+        )
+        raw_text = str(raw_competitors) if compare_enabled else "skipped"
+        after_filters_text = str(competitors) if compare_enabled else "skipped"
+        return (
+            f"- Compare Mode: {compare_mode}"
+            f" | Feedback Min: {feedback_text}"
+            f" | Raw Hits: {raw_text}"
+            f" | After Filters: {after_filters_text}"
+        )
+
+    @classmethod
+    def _compile_target_notes(cls, note_chunks: list[str]) -> str:
+        if len(note_chunks) == 1:
+            return note_chunks[0]
+
+        grouped: dict[str, dict[str, object]] = {}
+        for note in note_chunks:
+            label, body = cls._split_note(note)
+            key = cls._normalize_note_body(body)
+            group = grouped.setdefault(key, {"labels": [], "body": body})
+            labels = group["labels"]
+            assert isinstance(labels, list)
+            labels.append(label)
+
+        if len(grouped) == 1:
+            only_group = next(iter(grouped.values()))
+            return "\n".join([
+                f"MULTI_TARGET ({len(note_chunks)})",
+                f"- Listings: {cls._format_listing_labels(only_group['labels'])}",
+                str(only_group["body"]),
+            ])
+
+        compiled = [f"MULTI_TARGET ({len(note_chunks)})"]
+        for idx, group in enumerate(grouped.values(), start=1):
+            compiled.append(f"GROUP {idx} ({len(group['labels'])})")
+            compiled.append(f"- Listings: {cls._format_listing_labels(group['labels'])}")
+            compiled.append(str(group["body"]))
+        return "\n\n".join(compiled)
+
+    @staticmethod
+    def _split_note(note: str) -> tuple[str, str]:
+        lines = note.splitlines()
+        if lines and lines[0].startswith("[Listing] "):
+            return lines[0].replace("[Listing] ", "", 1), "\n".join(lines[1:]).strip()
+        return "Unknown listing", note.strip()
+
+    @staticmethod
+    def _normalize_note_body(body: str) -> str:
+        return re.sub(r"\[\d{2}/\d{2} \d{2}:\d{2}\]", "[TIME]", body)
+
+    @staticmethod
+    def _format_listing_labels(labels: list[str]) -> str:
+        counts: dict[str, int] = {}
+        for label in labels:
+            counts[label] = counts.get(label, 0) + 1
+
+        formatted = []
+        for label, count in counts.items():
+            entry = f"[{label}]"
+            if count > 1:
+                entry = f"{entry} x{count}"
+            formatted.append(entry)
+        return "; ".join(formatted)

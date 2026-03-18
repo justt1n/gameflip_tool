@@ -37,8 +37,19 @@ class GameflipAdapter(IMarketplaceAdapter):
     async def prepare_pricing_input(self, target: ResolvedListingTarget) -> PreparedPricingInput:
         return await self.prefetch_service.prepare_pricing_input(target)
 
-    async def update_price(self, offer_id: str, new_price: float) -> bool:
-        return await self.price_updater.update_price(offer_id, new_price)
+    async def update_price(
+        self,
+        offer_id: str,
+        new_price: float,
+        current_version: Optional[str | int] = None,
+        current_status: Optional[str] = None,
+    ) -> bool:
+        return await self.price_updater.update_price(
+            offer_id,
+            new_price,
+            current_version=current_version,
+            current_status=current_status,
+        )
 
     async def close(self):
         await self.client.close()

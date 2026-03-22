@@ -226,10 +226,7 @@ class Orchestrator:
                 current_status=prepared.current_offer.raw_status,
             )
             if success:
-                logger.info(
-                    f"SUCCESS: {original_payload.product_name} -> {result.final_price.price:.3f}"
-                )
-                return self._build_audit_note(
+                note = self._build_audit_note(
                     target=target,
                     base_log=base_log,
                     competitors=competitor_count,
@@ -239,7 +236,16 @@ class Orchestrator:
                     final_price=result.final_price.price,
                     compare_enabled=compare_enabled,
                 )
-            return self._build_audit_note(
+                self._log_target_result(
+                    payload=original_payload,
+                    target=target,
+                    edited=True,
+                    final_price=result.final_price.price,
+                    reason="updated",
+                )
+                return note
+
+            note = self._build_audit_note(
                 target=target,
                 base_log=base_log,
                 competitors=competitor_count,
@@ -250,9 +256,18 @@ class Orchestrator:
                 reason="update failed",
                 compare_enabled=compare_enabled,
             )
+            self._log_target_result(
+                payload=original_payload,
+                target=target,
+                edited=False,
+                final_price=result.final_price.price,
+                reason="update failed",
+                level="warning",
+            )
+            return note
 
         reason = "no change" if result.status == 2 else "skip"
-        return self._build_audit_note(
+        note = self._build_audit_note(
             target=target,
             base_log=base_log,
             competitors=competitor_count,
@@ -263,6 +278,32 @@ class Orchestrator:
             reason=reason,
             compare_enabled=compare_enabled,
         )
+        self._log_target_result(
+            payload=original_payload,
+            target=target,
+            edited=False,
+            final_price=result.final_price.price if result.final_price else None,
+            reason=reason,
+        )
+        return note
+
+    @staticmethod
+    def _log_target_result(
+        payload: Payload,
+        target: ResolvedListingTarget,
+        edited: bool,
+        final_price: Optional[float],
+        reason: str,
+        level: str = "info",
+    ) -> None:
+        listing_label = target.listing_name or target.listing_id or payload.product_name
+        final_text = f"{final_price:.3f}" if final_price is not None else "N/A"
+        action = "EDIT" if edited else "NO_EDIT"
+        message = (
+            f"Row {payload.row_index} [{action}] {listing_label} -> {final_text} "
+            f"(reason: {reason})"
+        )
+        getattr(logger, level)(message)
 
     @staticmethod
     def _build_audit_note(

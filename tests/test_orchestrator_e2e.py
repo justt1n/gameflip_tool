@@ -104,6 +104,24 @@ class TestOrchestratorE2E:
         assert "UPDATE" in log_entry[1]["note"]
 
     @pytest.mark.asyncio
+    async def test_no_change_is_logged_to_console(self, caplog):
+        p = make_payload(
+            product_name="No Change Item",
+            compare_mode="0",
+            fetched_min=12.0,
+            fetched_max=18.0,
+            inline_min_price="12.0",
+            row_index=7,
+        )
+        adapter = ConfigurableMockAdapter(my_price=12.0)
+        orch, sheet_eng, _ = _make_orchestrator([p], adapter=adapter)
+
+        with caplog.at_level("INFO"):
+            await orch._run_one_round()
+
+        assert "Row 7 [NO_EDIT] No Change Item -> N/A (reason: no change)" in caplog.text
+
+    @pytest.mark.asyncio
     async def test_update_failure_logged(self):
         p = make_payload(fetched_min=12.0, fetched_max=18.0, inline_min_price="12.0", min_adj=0.01, max_adj=0.05)
         adapter = ConfigurableMockAdapter(

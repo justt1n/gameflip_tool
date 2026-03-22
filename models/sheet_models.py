@@ -40,6 +40,48 @@ class BaseGSheetModel(BaseModel):
     _col_map: ClassVar[Optional[Dict[str, str]]] = None
 
     @classmethod
+    def _format_validation_error(cls, error: ValidationError) -> str:
+        """Render a compact, row-friendly validation error message."""
+        cls._build_maps_if_needed()
+
+        details = []
+        for err in error.errors():
+            loc = err.get("loc", ())
+            field_name = str(loc[-1]) if loc else "unknown"
+            column_letter = cls._col_map.get(field_name)
+            error_type = err.get("type", "validation_error")
+            error_msg = err.get("msg", "invalid value")
+            field_info = cls.model_fields.get(field_name)
+            input_value = err.get("input")
+
+            is_missing_required = (
+                error_type == "missing"
+                or (
+                    input_value is None
+                    and field_info is not None
+                    and field_info.is_required()
+                    and not cls._is_optional_annotation(field_info.annotation)
+                )
+            )
+
+            if is_missing_required:
+                detail = f"missing required field '{field_name}'"
+            else:
+                detail = f"invalid field '{field_name}': {error_msg}"
+
+            if column_letter:
+                detail += f" (column {column_letter})"
+            details.append(detail)
+
+        return "; ".join(details) if details else str(error)
+
+    @staticmethod
+    def _is_optional_annotation(annotation: Any) -> bool:
+        origin = getattr(annotation, "__origin__", None)
+        args = getattr(annotation, "__args__", ())
+        return origin is Optional or type(None) in args
+
+    @classmethod
     def _build_maps_if_needed(cls):
         """Lazily build the column mapping from field annotations."""
         if cls._index_map is not None and cls._col_map is not None:
@@ -86,7 +128,11 @@ class BaseGSheetModel(BaseModel):
         try:
             return cls.model_validate(data_dict)
         except ValidationError as e:
-            logging.warning(f"Skipping row {row_index}: validation error: {e}")
+            logging.warning(
+                "Skipping row %s: validation error: %s",
+                row_index,
+                cls._format_validation_error(e),
+            )
             return None
 
     @classmethod
@@ -373,7 +419,11 @@ class Payload(BaseGSheetModel):
         try:
             return cls.model_validate(data_dict)
         except ValidationError as e:
-            logging.warning(f"Skipping row {row_index}: validation error: {e}")
+            logging.warning(
+                "Skipping row %s: validation error: %s",
+                row_index,
+                cls._format_validation_error(e),
+            )
             return None
 
     @classmethod

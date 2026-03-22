@@ -75,6 +75,18 @@ class TestPayloadFromRow:
         payload = Payload.from_row(row, row_index=10)
         assert payload is None  # Validation error → None
 
+    def test_from_row_missing_required_field_logs_clear_message(self, caplog):
+        row = [""] * 28
+        row[1] = "1"
+
+        with caplog.at_level("WARNING"):
+            payload = Payload.from_row(row, row_index=10)
+
+        assert payload is None
+        assert "Skipping row 10: validation error:" in caplog.text
+        assert "missing required field 'product_name'" in caplog.text
+        assert "(column C)" in caplog.text
+
     def test_from_row_external_sheet_refs(self):
         row = self._make_row(
             O="spreadsheet_id_1",

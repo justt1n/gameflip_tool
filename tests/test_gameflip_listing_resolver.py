@@ -40,6 +40,34 @@ class TestGameflipListingResolver:
         assert "5000 token" in index[0].search_text
 
     @pytest.mark.asyncio
+    async def test_merge_owned_listings_preserves_existing_ids_not_in_latest_fetch(self, tmp_path):
+        existing = make_owned_listing(
+            id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            name="Existing Listing",
+        )
+        updated = make_owned_listing(
+            id="11111111-1111-1111-1111-111111111111",
+            name="Updated Listing",
+        )
+        artifact_store = GameflipArtifactStore(
+            dump_path=str(tmp_path / "owned_listings.json"),
+            index_path=str(tmp_path / "owned_listings_index.json"),
+        )
+
+        artifact_store.save_owned_listings([existing])
+        merged = artifact_store.merge_owned_listings([updated])
+
+        assert {listing.id for listing in merged} == {
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "11111111-1111-1111-1111-111111111111",
+        }
+        index = artifact_store.load_owned_listings_index()
+        assert {entry.id for entry in index} == {
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "11111111-1111-1111-1111-111111111111",
+        }
+
+    @pytest.mark.asyncio
     async def test_resolve_payload_uses_local_index(self, tmp_path):
         listings = [make_owned_listing()]
         artifact_store = GameflipArtifactStore(

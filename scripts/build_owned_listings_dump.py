@@ -25,6 +25,11 @@ async def main():
         default=settings.GAMEFLIP_LISTINGS_INDEX_FILE,
         help="Path to the owned-listings index JSON file.",
     )
+    parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="Replace the current dump instead of merging into the existing dump/index.",
+    )
     args = parser.parse_args()
 
     auth = GameflipAuth(
@@ -42,10 +47,14 @@ async def main():
     )
     try:
         listings = await client.list_owned_listings()
-        artifact_store.save_owned_listings(listings)
+        if args.replace:
+            artifact_store.save_owned_listings(listings)
+            final_listings = listings
+        else:
+            final_listings = artifact_store.merge_owned_listings(listings)
         print(
-            f"Wrote {len(listings)} listings to {args.output} "
-            f"and {args.index_output}"
+            f"Wrote {len(final_listings)} listings to {args.output} "
+            f"and {args.index_output} (fetched {len(listings)} this run)"
         )
     finally:
         await client.close()

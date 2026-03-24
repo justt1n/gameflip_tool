@@ -38,8 +38,26 @@ class GameflipArtifactStore:
             encoding="utf-8",
         )
 
+    def merge_owned_listings(self, listings: list[GameflipListing]) -> list[GameflipListing]:
+        existing = self.load_owned_listings_dump() or []
+        merged = self._merge_listings(existing, listings)
+        self.save_owned_listings(merged)
+        return merged
+
     def build_owned_listings_index(self, listings: list[GameflipListing]) -> list[OwnedListingIndexEntry]:
         return [self._index_entry(listing) for listing in listings]
+
+    @staticmethod
+    def _merge_listings(
+        existing: list[GameflipListing],
+        incoming: list[GameflipListing],
+    ) -> list[GameflipListing]:
+        merged_by_id: dict[str, GameflipListing] = {
+            listing.id: listing for listing in existing
+        }
+        for listing in incoming:
+            merged_by_id[listing.id] = listing
+        return list(merged_by_id.values())
 
     @staticmethod
     def _dump_entry(listing: GameflipListing) -> dict:

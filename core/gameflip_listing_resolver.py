@@ -83,22 +83,21 @@ class GameflipListingResolver:
                     source="direct_id",
                 )
 
-        if product_compare.startswith("http"):
-            parsed = urlparse(product_compare)
-            if "gameflip.com" in (parsed.netloc or "") and parsed.path.startswith("/shop/"):
-                query = parse_qs(parsed.query)
-                path_slug = parsed.path.rstrip("/").split("/")[-1]
-                return ListingSearchDefinition(
-                    term=self._first(query, "term"),
-                    platform=normalize_platform(self._first(query, "platform")),
-                    category=normalize_category((payload.category_name or "").strip())
-                    or normalize_shop_category_slug(path_slug),
-                    status=normalize_status(self._first(query, "status")),
-                    tags=self._split_tags(self._first(query, "tags")),
-                    include_keywords=include_keywords,
-                    exclude_keywords=exclude_keywords,
-                    source="search_url",
-                )
+        parsed_search = self._extract_search_query_payload(
+            payload,
+            [product_compare, product_id, product_link],
+        )
+        if parsed_search:
+            return ListingSearchDefinition(
+                term=parsed_search["term"],
+                platform=parsed_search["platform"],
+                category=parsed_search["category"],
+                status=parsed_search["status"],
+                tags=parsed_search["tags"],
+                include_keywords=include_keywords,
+                exclude_keywords=exclude_keywords,
+                source="search_url",
+            )
 
         fallback_term = payload.product_name or product_link or product_compare or product_id
         fallback_term = (fallback_term or "").strip() or None
@@ -178,6 +177,31 @@ class GameflipListingResolver:
     def _first(query: dict[str, list[str]], key: str) -> Optional[str]:
         values = query.get(key) or []
         return values[0] if values else None
+
+    @classmethod
+    def _extract_search_query_payload(
+        cls,
+        payload: Payload,
+        candidates: list[str],
+    ) -> Optional[dict[str, Optional[str] | list[str]]]:
+        for candidate in candidates:
+            if not candidate or not candidate.startswith("http"):
+                continue
+            parsed = urlparse(candidate)
+            if "gameflip.com" not in (parsed.netloc or "") or not parsed.path.startswith("/shop/"):
+                continue
+
+            query = parse_qs(parsed.query)
+            path_slug = parsed.path.rstrip("/").split("/")[-1]
+            return {
+                "term": cls._first(query, "term"),
+                "platform": normalize_platform(cls._first(query, "platform")),
+                "category": normalize_category((payload.category_name or "").strip())
+                or normalize_shop_category_slug(path_slug),
+                "status": normalize_status(cls._first(query, "status")),
+                "tags": cls._split_tags(cls._first(query, "tags")),
+            }
+        return None
 
     @staticmethod
     def _split_keywords(value: Optional[str]) -> list[str]:

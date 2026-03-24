@@ -307,12 +307,18 @@ class GameflipPrefetchService:
 
     @staticmethod
     def _parse_compare_query(payload) -> dict[str, Any]:
-        product_compare = (payload.product_compare or "").strip()
-        if not product_compare:
+        compare_source = (payload.product_compare or "").strip()
+        if not compare_source and getattr(payload, "sheet_schema", "") == "requirement":
+            candidates = [
+                (payload.product_link or "").strip(),
+                (payload.product_id or "").strip(),
+            ]
+            compare_source = next((candidate for candidate in candidates if candidate), "")
+        if not compare_source:
             return {}
 
-        if product_compare.startswith("http"):
-            parsed = urlparse(product_compare)
+        if compare_source.startswith("http"):
+            parsed = urlparse(compare_source)
             if "gameflip.com" not in (parsed.netloc or ""):
                 return {}
 
@@ -345,7 +351,7 @@ class GameflipPrefetchService:
             "status": "onsale",
             "sort": GAMEFLIP_DEFAULT_SEARCH_SORT,
             "limit": 100,
-            "term": product_compare,
+            "term": compare_source,
             **(
                 {"tags": f"roblox_game: {payload.game_name}"}
                 if payload.game_name else {}

@@ -128,6 +128,37 @@ class TestGameflipListingResolver:
         assert [listing.listing_id for listing in matches] == ["11111111-1111-1111-1111-111111111111"]
 
     @pytest.mark.asyncio
+    async def test_resolve_payload_uses_product_link_search_url_when_compare_is_blank(self, tmp_path):
+        listings = [
+            make_owned_listing(
+                category="GIFTCARD",
+                platform="google",
+                name="$20.00 Google Play",
+                description="$20.00 Google Play card",
+                tags=["balance: 2000", "currency: USD", "type: giftcard"],
+            )
+        ]
+        artifact_store = GameflipArtifactStore(
+            dump_path=str(tmp_path / "owned_listings.json"),
+            index_path=str(tmp_path / "owned_listings_index.json"),
+        )
+        artifact_store.save_owned_listings(listings)
+        resolver = GameflipListingResolver(artifact_store)
+
+        payload = make_payload(product_id="")
+        payload.product_compare = None
+        payload.product_link = (
+            "https://gameflip.com/shop/gift-cards?status=onsale&limit=36"
+            "&term=Google%20Play&platform=google&tags=type%3A%20giftcard"
+        )
+        payload.product_id = payload.product_link
+        payload.category_name = "Gift Card"
+
+        matches = await resolver.resolve_payload(payload)
+
+        assert [listing.listing_id for listing in matches] == ["11111111-1111-1111-1111-111111111111"]
+
+    @pytest.mark.asyncio
     async def test_numeric_term_does_not_match_larger_number_substring(self, tmp_path):
         listings = [
             make_owned_listing(name="5000 Tokens | Blade Ball"),

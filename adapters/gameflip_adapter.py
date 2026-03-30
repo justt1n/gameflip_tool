@@ -24,7 +24,7 @@ class GameflipAdapter(IMarketplaceAdapter):
             dump_path=listings_dump_path,
             index_path=listings_index_path,
         )
-        self.listing_resolver = GameflipListingResolver(self.artifact_store)
+        self.listing_resolver = GameflipListingResolver(self.artifact_store, client=client)
         self.prefetch_service = GameflipPrefetchService(client)
         self.price_updater = GameflipPriceUpdater(client)
 

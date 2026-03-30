@@ -23,6 +23,31 @@ def make_owned_listing(**overrides):
     return GameflipListing.model_validate(data)
 
 
+class StubResolverClient:
+    def __init__(self, listings=None, owner_id="owner-self"):
+        self.listings = listings or []
+        self.owner_id = owner_id
+        self.last_query = None
+
+    async def get_owner_id(self):
+        return self.owner_id
+
+    async def listing_search_all(self, query):
+        self.last_query = query
+
+        class Result:
+            def __init__(self, listings):
+                self.listings = listings
+
+        return Result(self.listings)
+
+    async def listing_get(self, listing_id):
+        for listing in self.listings:
+            if listing.id == listing_id:
+                return listing
+        raise KeyError(listing_id)
+
+
 class TestGameflipListingResolver:
     @pytest.mark.asyncio
     async def test_dump_file_contains_normalized_owned_listing_fields(self, tmp_path):
@@ -185,6 +210,41 @@ class TestGameflipListingResolver:
         matches = await resolver.resolve_payload(payload)
 
         assert [listing.listing_id for listing in matches] == ["11111111-1111-1111-1111-111111111111"]
+
+    @pytest.mark.asyncio
+    async def test_resolve_payload_falls_back_to_live_owner_search_when_index_misses(self, tmp_path):
+        artifact_store = GameflipArtifactStore(
+            dump_path=str(tmp_path / "owned_listings.json"),
+            index_path=str(tmp_path / "owned_listings_index.json"),
+        )
+        artifact_store.save_owned_listings([])
+        live_listing = make_owned_listing(
+            category="GIFTCARD",
+            platform="apple",
+            name="$50.00 USD Apple",
+            description="$50.00 USD Apple",
+            tags=["type: giftcard", "balance: 50.00", "currency: USD"],
+        )
+        client = StubResolverClient([live_listing])
+        resolver = GameflipListingResolver(artifact_store, client=client)
+
+        payload = make_payload(product_id="")
+        payload.product_compare = None
+        payload.product_link = (
+            "https://gameflip.com/shop/gift-cards?status=onsale&limit=36"
+            "&term=Apple&platform=apple&tags=type%3A%20giftcard"
+        )
+        payload.product_id = payload.product_link
+        payload.category_name = "Gift Card"
+
+        matches = await resolver.resolve_payload(payload)
+
+        assert [listing.listing_id for listing in matches] == [live_listing.id]
+        assert client.last_query["owner"] == "owner-self"
+        assert client.last_query["category"] == "GIFTCARD"
+        assert client.last_query["platform"] == "apple"
+        stored = artifact_store.load_owned_listings_index()
+        assert [entry.id for entry in stored] == [live_listing.id]
 
     @pytest.mark.asyncio
     async def test_numeric_term_does_not_match_larger_number_substring(self, tmp_path):

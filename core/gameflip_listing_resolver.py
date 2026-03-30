@@ -4,6 +4,7 @@ from urllib.parse import parse_qs, urlparse
 
 from pydantic import BaseModel, Field
 
+from clients.gameflip_client import GameflipClient
 from constants.gameflip_constants import (
     GAMEFLIP_DEFAULT_LISTING_STATUS,
     normalize_category,
@@ -12,6 +13,7 @@ from constants.gameflip_constants import (
     normalize_status,
 )
 from core.gameflip_artifact_store import GameflipArtifactStore
+from models.gameflip_models import GameflipListing
 from models.runtime_models import OwnedListingIndexEntry, ResolvedListingTarget
 from models.sheet_models import Payload
 
@@ -31,19 +33,33 @@ class ListingSearchDefinition(BaseModel):
 class GameflipListingResolver:
     LISTING_ID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
 
-    def __init__(self, artifact_store: GameflipArtifactStore):
+    def __init__(
+        self,
+        artifact_store: GameflipArtifactStore,
+        client: Optional[GameflipClient] = None,
+    ):
         self.artifact_store = artifact_store
+        self.client = client
         self._owned_index: Optional[list[OwnedListingIndexEntry]] = None
 
     async def resolve_payload(self, payload: Payload) -> list[ResolvedListingTarget]:
         definition = self.build_search_definition(payload)
-        index_entries = self._owned_index or self.artifact_store.load_owned_listings_index()
-        if not index_entries:
+        index_entries = self._owned_index
+        if index_entries is None:
+            index_entries = self.artifact_store.load_owned_listings_index()
+
+        if index_entries is None:
             raise ValueError(
                 "Owned listings artifacts not found. Run `python scripts/build_owned_listings_dump.py` first."
             )
 
         matches = self.match_owned_listings(definition, index_entries)
+        if not matches and self.client is not None:
+            live_listings = await self._load_live_owned_listings(definition)
+            if live_listings:
+                merged_listings = self.artifact_store.merge_owned_listings(live_listings)
+                index_entries = self.artifact_store.build_owned_listings_index(merged_listings)
+                matches = self.match_owned_listings(definition, index_entries)
         if not matches:
             raise ValueError(f"No owned listings matched search definition ({definition.source}) in index")
 
@@ -242,6 +258,41 @@ class GameflipListingResolver:
         if query_token.isdigit() or text_token.isdigit():
             return query_token == text_token
         return cls._normalize_word(query_token) == cls._normalize_word(text_token)
+
+    async def _load_live_owned_listings(
+        self,
+        definition: ListingSearchDefinition,
+    ) -> list[GameflipListing]:
+        if self.client is None:
+            return []
+
+        owner_id = await self.client.get_owner_id()
+        if definition.listing_id:
+            listing = await self.client.listing_get(definition.listing_id)
+            if listing.owner == owner_id:
+                return [listing]
+            return []
+
+        query: dict[str, object] = {
+            "owner": owner_id,
+            "limit": 100,
+        }
+        if definition.status:
+            query["status"] = definition.status
+        if definition.platform:
+            query["platform"] = definition.platform
+        if definition.category:
+            query["category"] = definition.category
+        if definition.term:
+            query["term"] = definition.term
+        if definition.tags:
+            query["tags"] = "^".join(definition.tags)
+
+        if hasattr(self.client, "listing_search_all"):
+            result = await self.client.listing_search_all(query)
+        else:
+            result = await self.client.listing_search(query)
+        return [listing for listing in result.listings if listing.owner == owner_id]
 
     @staticmethod
     def _normalize_word(value: str) -> str:

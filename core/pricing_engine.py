@@ -40,20 +40,25 @@ class PricingEngine:
         else:
             analysis = AnalysisResult()
 
-        selected_reference = self.reference_price_selector.select_best_price(payload, analysis.competitive_price)
-        if selected_reference is not None:
-            analysis.selected_reference_name = (
-                analysis.competitor_name
-                if selected_reference.source_name == "Competition"
-                else selected_reference.source_name
-            )
-            analysis.selected_reference_price = selected_reference.price
+        use_exact_fallback_max = analysis.competitive_price is None
+        if use_exact_fallback_max:
+            target = self._fallback_max_target(payload)
+            competitor_name = "Max price (fallback)"
+        else:
+            selected_reference = self.reference_price_selector.select_best_price(payload, analysis.competitive_price)
+            if selected_reference is not None:
+                analysis.selected_reference_name = (
+                    analysis.competitor_name
+                    if selected_reference.source_name == "Competition"
+                    else selected_reference.source_name
+                )
+                analysis.selected_reference_price = selected_reference.price
 
-        target = self._calc_final_price(
-            payload,
-            competitor_price=selected_reference.price if selected_reference is not None else None,
-        )
-        competitor_name = analysis.selected_reference_name or analysis.competitor_name or "No Competition"
+            target = self._calc_final_price(
+                payload,
+                competitor_price=selected_reference.price if selected_reference is not None else None,
+            )
+            competitor_name = analysis.selected_reference_name or analysis.competitor_name or "No Competition"
 
         min_price_val = payload.fetched_min_price
         if min_price_val is None:
@@ -78,9 +83,9 @@ class PricingEngine:
             )
 
         if mode == 1:
-            return self._handle_mode_1(prepared, target, competitor_name, analysis)
+            return self._handle_mode_1(prepared, target, competitor_name, analysis, exact_target=use_exact_fallback_max)
         if mode == 2:
-            return self._handle_mode_2(prepared, target, competitor_name, analysis)
+            return self._handle_mode_2(prepared, target, competitor_name, analysis, exact_target=use_exact_fallback_max)
 
         return PreparedPricingResult(
             status=0, payload=payload, target=prepared.target,
@@ -157,10 +162,11 @@ class PricingEngine:
         target: float,
         comp_name: str,
         analysis: Optional[AnalysisResult],
+        exact_target: bool = False,
     ) -> PreparedPricingResult:
         """Always Follow: update to target regardless of direction."""
         payload = prepared.payload
-        if not self._is_significant(payload.current_price, target, payload):
+        if not self._is_significant(payload.current_price, target, payload, ignore_adjustment_noise=exact_target):
             return PreparedPricingResult(
                 status=2, payload=payload, target=prepared.target,
                 log_message=self.log_formatter.format("equal", payload, payload.current_price, analysis),
@@ -183,10 +189,16 @@ class PricingEngine:
         target: float,
         comp_name: str,
         analysis: Optional[AnalysisResult],
+        exact_target: bool = False,
     ) -> PreparedPricingResult:
         """Smart Follow: only decrease, never increase."""
         payload = prepared.payload
-        if payload.current_price < target and self._is_significant(payload.current_price, target, payload):
+        if payload.current_price < target and self._is_significant(
+            payload.current_price,
+            target,
+            payload,
+            ignore_adjustment_noise=exact_target,
+        ):
             msg = self.log_formatter.format("equal", payload, payload.current_price, analysis)
             msg = msg.replace("matches target", "already below target (Mode 2 — Hold)")
             return PreparedPricingResult(
@@ -194,7 +206,7 @@ class PricingEngine:
                 log_message=msg,
                 analysis=analysis,
             )
-        if not self._is_significant(payload.current_price, target, payload):
+        if not self._is_significant(payload.current_price, target, payload, ignore_adjustment_noise=exact_target):
             return PreparedPricingResult(
                 status=2, payload=payload, target=prepared.target,
                 log_message=self.log_formatter.format("equal", payload, payload.current_price, analysis),
@@ -212,14 +224,31 @@ class PricingEngine:
         )
 
     @staticmethod
-    def _is_significant(price1: float, price2: float, payload: Payload) -> bool:
+    def _is_significant(
+        price1: float,
+        price2: float,
+        payload: Payload,
+        ignore_adjustment_noise: bool = False,
+    ) -> bool:
         """True if price difference exceeds noise threshold."""
         rounding = payload.price_rounding if payload.price_rounding is not None else 2
         step = 1 / (10 ** rounding)
+        if ignore_adjustment_noise:
+            return abs(price1 - price2) > step * 0.5
 
         noise = 0.0
-        if payload.min_price_adjustment is not None and payload.max_price_adjustment is not None:
+        if (
+            not ignore_adjustment_noise
+            and payload.min_price_adjustment is not None
+            and payload.max_price_adjustment is not None
+        ):
             noise = abs(payload.max_price_adjustment - payload.min_price_adjustment)
 
         threshold = max(noise + step * 0.5, step * 1.5)
         return abs(price1 - price2) > threshold
+
+    @staticmethod
+    def _fallback_max_target(payload: Payload) -> float:
+        if payload.fetched_max_price is None:
+            return 0.0
+        return payload.fetched_max_price

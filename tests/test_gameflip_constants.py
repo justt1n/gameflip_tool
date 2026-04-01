@@ -2,6 +2,7 @@ from constants.gameflip_constants import (
     GAMEFLIP_CATEGORIES,
     GAMEFLIP_DEFAULT_LISTING_STATUS,
     normalize_category,
+    normalize_giftcard_product_slug_platform,
     normalize_platform,
     normalize_shop_category_slug,
 )
@@ -22,4 +23,7 @@ def test_category_alias_normalization():
 def test_platform_and_status_defaults():
     assert normalize_platform("PS5") == "playstation_5"
     assert normalize_platform("xbox one") == "xbox_one"
+    assert normalize_platform("xbox gift card") == "xbox_live"
+    assert normalize_platform("apple") == "apple"
+    assert normalize_giftcard_product_slug_platform("xbox-gift-card") == "xbox_live"
     assert GAMEFLIP_DEFAULT_LISTING_STATUS == "onsale"

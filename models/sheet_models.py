@@ -265,6 +265,8 @@ class Payload(BaseGSheetModel):
     category_name: Optional[str] = None     # Future requirement-sheet compatibility
     game_name: Optional[str] = None         # Future requirement-sheet compatibility
     feedback_min: Optional[float] = None
+    check_duplicate_listing_str: Optional[str] = None
+    duplicate_listing: Optional[int] = None
     resolved_listing_id: Optional[str] = None
     resolved_listing_name: Optional[str] = None
     sheet_schema: str = "legacy"
@@ -293,6 +295,8 @@ class Payload(BaseGSheetModel):
         "maxadj": "max_price_adjustment",
         "rounding": "price_rounding",
         "feedback": "feedback_min",
+        "checkduplicatelisting": "check_duplicate_listing_str",
+        "duplicatelisting": "duplicate_listing",
         "idsheetmin": "idsheet_min",
         "sheetmin": "sheet_min",
         "cellmin": "cell_min",
@@ -352,46 +356,49 @@ class Payload(BaseGSheetModel):
         "min_price_adjustment": 11,
         "max_price_adjustment": 12,
         "price_rounding": 13,
-        "idsheet_min": 17,
-        "sheet_min": 18,
-        "cell_min": 19,
-        "idsheet_max": 23,
-        "sheet_max": 24,
-        "cell_max": 25,
-        "idsheet_stock": 29,
-        "sheet_stock": 30,
-        "cell_stock": 31,
-        "idsheet_blacklist": 38,
-        "sheet_blacklist": 39,
-        "cell_blacklist": 40,
-        "ss1_check": 42,
-        "ss1_profit": 43,
-        "ss1_hesonhan": 44,
-        "ss1_quydoidonvi": 45,
-        "ss1_idsheet_price": 46,
-        "ss1_sheet_price": 47,
-        "ss1_cell_price": 48,
-        "ss2_check": 49,
-        "ss2_profit": 50,
-        "ss2_hesonhan": 51,
-        "ss2_quydoidonvi": 52,
-        "ss2_idsheet_price": 53,
-        "ss2_sheet_price": 54,
-        "ss2_cell_price": 55,
-        "ss3_check": 56,
-        "ss3_profit": 57,
-        "ss3_hesonhan": 58,
-        "ss3_quydoidonvi": 59,
-        "ss3_idsheet_price": 60,
-        "ss3_sheet_price": 61,
-        "ss3_cell_price": 62,
-        "ss4_check": 63,
-        "ss4_profit": 64,
-        "ss4_hesonhan": 65,
-        "ss4_quydoidonvi": 66,
-        "ss4_idsheet_price": 67,
-        "ss4_sheet_price": 68,
-        "ss4_cell_price": 69,
+        "feedback_min": 15,
+        "check_duplicate_listing_str": 16,
+        "duplicate_listing": 17,
+        "idsheet_min": 19,
+        "sheet_min": 20,
+        "cell_min": 21,
+        "idsheet_max": 25,
+        "sheet_max": 26,
+        "cell_max": 27,
+        "idsheet_stock": 31,
+        "sheet_stock": 32,
+        "cell_stock": 33,
+        "idsheet_blacklist": 40,
+        "sheet_blacklist": 41,
+        "cell_blacklist": 42,
+        "ss1_check": 44,
+        "ss1_profit": 45,
+        "ss1_hesonhan": 46,
+        "ss1_quydoidonvi": 47,
+        "ss1_idsheet_price": 48,
+        "ss1_sheet_price": 49,
+        "ss1_cell_price": 50,
+        "ss2_check": 51,
+        "ss2_profit": 52,
+        "ss2_hesonhan": 53,
+        "ss2_quydoidonvi": 54,
+        "ss2_idsheet_price": 55,
+        "ss2_sheet_price": 56,
+        "ss2_cell_price": 57,
+        "ss3_check": 58,
+        "ss3_profit": 59,
+        "ss3_hesonhan": 60,
+        "ss3_quydoidonvi": 61,
+        "ss3_idsheet_price": 62,
+        "ss3_sheet_price": 63,
+        "ss3_cell_price": 64,
+        "ss4_check": 65,
+        "ss4_profit": 66,
+        "ss4_hesonhan": 67,
+        "ss4_quydoidonvi": 68,
+        "ss4_idsheet_price": 69,
+        "ss4_sheet_price": 70,
+        "ss4_cell_price": 71,
     }
     REQUIREMENT_UPDATE_COLUMNS: ClassVar[Dict[str, str]] = {
         "note": "D",
@@ -400,7 +407,7 @@ class Payload(BaseGSheetModel):
 
     @classmethod
     def _row_to_data_dict(cls, row_data: List[str]) -> Dict[str, Any]:
-        if len(row_data) >= 69:
+        if len(row_data) >= 71:
             return cls._requirement_row_to_data_dict(row_data)
         return super()._row_to_data_dict(row_data)
 
@@ -542,6 +549,21 @@ class Payload(BaseGSheetModel):
     @property
     def is_check_enabled(self) -> bool:
         return self.is_check_enabled_str == '1'
+
+    @property
+    def is_duplicate_listing_enabled(self) -> bool:
+        value = (self.check_duplicate_listing_str or "").strip().lower()
+        return value in {"1", "true", "on", "yes"}
+
+    @property
+    def duplicate_listing_target(self) -> Optional[int]:
+        if self.duplicate_listing is None:
+            return None
+        try:
+            value = int(self.duplicate_listing)
+        except (ValueError, TypeError):
+            return None
+        return value if value > 0 else None
 
     @property
     def compare_mode(self) -> int:

@@ -24,7 +24,7 @@ Client-specific Gameflip repricing project derived from `marketplace_automation`
    - Google Sheets credentials
    - `GAMEFLIP_API_KEY`
    - `GAMEFLIP_API_SECRET`
-   - Optional `GAMEFLIP_BASE_URL`, `GAMEFLIP_OWNER_ID`, `GAMEFLIP_RUNTIME_DATA_DIR`, `GAMEFLIP_LISTINGS_DUMP_PATH`, and `GAMEFLIP_LISTINGS_INDEX_PATH`
+  - Optional `GAMEFLIP_BASE_URL`, `GAMEFLIP_OWNER_ID`, `IS_GET_READY_PRODUCT`, `IS_SKIP_DIGITAL_GOODS_PUT`, `GAMEFLIP_COMPETITOR_FETCH_LIMIT`, `GAMEFLIP_SELLER_NAME_RESOLVE_LIMIT`, `GAMEFLIP_RUNTIME_DATA_DIR`, `GAMEFLIP_LISTINGS_DUMP_PATH`, and `GAMEFLIP_LISTINGS_INDEX_PATH`
 
 3. Build your owned listings dump first:
    ```bash
@@ -66,6 +66,10 @@ python -m pytest tests/ -v
 | `GAMEFLIP_API_SECRET` | Yes | Gameflip TOTP secret |
 | `GAMEFLIP_BASE_URL` | No | Override Gameflip API base URL |
 | `GAMEFLIP_OWNER_ID` | No | Cache your owner ID to skip a profile lookup |
+| `IS_GET_READY_PRODUCT` | No | When `true`, include `ready` listings in duplicate counting and source selection |
+| `IS_SKIP_DIGITAL_GOODS_PUT` | No | When `true`, skip duplicate creation for digital listings that would require `digital_goods_put` |
+| `GAMEFLIP_COMPETITOR_FETCH_LIMIT` | No | Max competitor listings fetched from Gameflip per compare query |
+| `GAMEFLIP_SELLER_NAME_RESOLVE_LIMIT` | No | Max seller profiles resolved per compare query for human-readable logs |
 | `GAMEFLIP_RUNTIME_DATA_DIR` | No | Override the runtime data directory used for local artifacts |
 | `GAMEFLIP_LISTINGS_DUMP_PATH` | No | Override the owned-listings JSON dump path |
 | `GAMEFLIP_LISTINGS_INDEX_PATH` | No | Override the owned-listings index JSON path |

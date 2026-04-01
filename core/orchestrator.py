@@ -4,10 +4,11 @@ import re
 from datetime import datetime
 from typing import Dict, Optional, Tuple
 
+from clients.gameflip_client import GameflipAPIError
 from core.pricing_engine import PricingEngine
 from core.sheet_engine import SheetEngine
 from interfaces.marketplace_adapter import IMarketplaceAdapter
-from models.runtime_models import ResolvedListingTarget
+from models.runtime_models import ProcessedTargetOutcome, ResolvedListingTarget
 from models.sheet_models import Payload
 
 logger = logging.getLogger(__name__)
@@ -143,7 +144,20 @@ class Orchestrator:
                 })
 
             # 3. Expand one row into concrete owned listings when supported
-            resolved_targets = await self._expand_payloads(hydrated, adapter)
+            try:
+                resolved_targets = await self._expand_payloads(hydrated, adapter)
+            except Exception:
+                if hydrated.is_duplicate_listing_enabled:
+                    try:
+                        duplicate_result = await adapter.ensure_duplicate_listing_quota(hydrated, None)
+                    except GameflipAPIError:
+                        duplicate_result = None
+                    if duplicate_result and duplicate_result.override_note:
+                        return (payload, {
+                            'note': duplicate_result.override_note,
+                            'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        })
+                raise
             if not resolved_targets:
                 return (payload, {
                     'note': "Error: No owned listings resolved for this row",
@@ -152,8 +166,22 @@ class Orchestrator:
 
             # 4. Run pricing engine and updates for each resolved listing
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            note_chunks = await self._process_resolved_targets(resolved_targets, adapter, payload)
-            final_note = self._compile_target_notes(note_chunks)
+            outcomes = await self._process_resolved_targets(resolved_targets, adapter, payload)
+            final_note = self._compile_target_notes([item.note for item in outcomes])
+            duplicate_price = next((item.final_price for item in outcomes if item.final_price is not None), None)
+            try:
+                duplicate_result = await adapter.ensure_duplicate_listing_quota(hydrated, duplicate_price)
+            except GameflipAPIError as exc:
+                duplicate_note = "\n".join([
+                    "Duplicate skipped",
+                    f"Reason: {exc}",
+                ])
+                final_note = final_note.rstrip() + "\n" + duplicate_note
+            else:
+                if duplicate_result.override_note:
+                    final_note = duplicate_result.override_note
+                elif duplicate_result.append_note:
+                    final_note = final_note.rstrip() + "\n" + duplicate_result.append_note
 
             log_data = {
                 'note': final_note,
@@ -190,10 +218,10 @@ class Orchestrator:
         resolved_targets: list[ResolvedListingTarget],
         adapter: IMarketplaceAdapter,
         original_payload: Payload,
-    ) -> list[str]:
+    ) -> list[ProcessedTargetOutcome]:
         semaphore = asyncio.Semaphore(self.target_workers)
 
-        async def run_target(target: ResolvedListingTarget) -> str:
+        async def run_target(target: ResolvedListingTarget) -> ProcessedTargetOutcome:
             async with semaphore:
                 return await self._process_resolved_target(target, adapter, original_payload)
 
@@ -205,7 +233,7 @@ class Orchestrator:
         target: ResolvedListingTarget,
         adapter: IMarketplaceAdapter,
         original_payload: Payload,
-    ) -> str:
+    ) -> ProcessedTargetOutcome:
         prepared = await adapter.prepare_pricing_input(target)
         result = await self.pricing_engine.process(prepared)
         display_offers = prepared.competition.offers
@@ -243,7 +271,7 @@ class Orchestrator:
                     final_price=result.final_price.price,
                     reason="updated",
                 )
-                return note
+                return ProcessedTargetOutcome(note=note, final_price=result.final_price.price)
 
             note = self._build_audit_note(
                 target=target,
@@ -264,7 +292,7 @@ class Orchestrator:
                 reason="update failed",
                 level="warning",
             )
-            return note
+            return ProcessedTargetOutcome(note=note, final_price=result.final_price.price)
 
         reason = "no change" if result.status == 2 else "skip"
         note = self._build_audit_note(
@@ -285,7 +313,10 @@ class Orchestrator:
             final_price=result.final_price.price if result.final_price else None,
             reason=reason,
         )
-        return note
+        return ProcessedTargetOutcome(
+            note=note,
+            final_price=result.final_price.price if result.final_price else prepared.current_offer.price,
+        )
 
     @staticmethod
     def _log_target_result(

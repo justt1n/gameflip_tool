@@ -44,17 +44,25 @@ class GameflipListing(BaseModel):
     description: Optional[str] = None
     category: Optional[str] = None
     platform: Optional[str] = None
+    accept_currency: Optional[str] = None
     price: Optional[int] = None
     upc: Optional[str] = None
     status: Optional[str] = None
     version: Optional[str | int] = None
     condition: Optional[str] = None
     digital: Optional[bool] = None
+    digital_region: Optional[str] = None
+    digital_deliverable: Optional[str] = None
     digital_fee: Optional[int] = None
     commission: Optional[int] = None
+    expire_in_days: Optional[int] = None
     seller_ratings: Optional[int] = None
     shipping_paid_by: Optional[str] = None
     shipping_fee: Optional[int] = None
+    shipping_within_days: Optional[str | int] = None
+    shipping_from_state: Optional[str] = None
+    shipping_predefined_package: Optional[str] = None
+    cover_photo: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
     photo: dict[str, GameflipPhoto] = Field(default_factory=dict)
 

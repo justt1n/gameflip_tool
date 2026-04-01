@@ -13,6 +13,7 @@ class OwnedListingIndexEntry(BaseModel):
     name: Optional[str] = None
     category: Optional[str] = None
     platform: Optional[str] = None
+    digital_region: Optional[str] = None
     upc: Optional[str] = None
     status: Optional[str] = None
     tags: list[str] = Field(default_factory=list)
@@ -62,3 +63,16 @@ class PreparedPricingResult(BaseModel):
     log_message: Optional[str] = None
     update_command: Optional[PriceUpdateCommand] = None
     analysis: Optional[AnalysisResult] = None
+
+
+class DuplicateListingResult(BaseModel):
+    override_note: Optional[str] = None
+    append_note: Optional[str] = None
+    created_count: int = 0
+    active_before: int = 0
+    active_after: int = 0
+
+
+class ProcessedTargetOutcome(BaseModel):
+    note: str
+    final_price: Optional[float] = None

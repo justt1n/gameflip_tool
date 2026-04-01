@@ -5,7 +5,7 @@ from core.competition_analyzer import CompetitionAnalyzer
 from core.log_formatter import LogFormatter
 from core.orchestrator import Orchestrator
 from core.pricing_engine import PricingEngine
-from models.runtime_models import PreparedPricingInput, ResolvedListingTarget
+from models.runtime_models import DuplicateListingResult, PreparedPricingInput, ResolvedListingTarget
 from models.standard_models import PlatformIdentifiers, StandardCompetitorOffer
 from tests.conftest import ConfigurableMockAdapter, make_payload, make_prepared_input
 
@@ -216,6 +216,56 @@ class TestOrchestratorE2E:
         assert "[Listing A]" in note
         assert "[Listing B]" in note
         assert "MULTI_TARGET (2)" in note
+
+    @pytest.mark.asyncio
+    async def test_duplicate_append_note_preserves_pricing_log(self):
+        class DuplicateAppendAdapter(ConfigurableMockAdapter):
+            async def ensure_duplicate_listing_quota(self, payload, duplicate_price):
+                return DuplicateListingResult(
+                    append_note="Duplicate created: 1\nTarget: k=2, active_before=1, active_after=2"
+                )
+
+        payload = make_payload(
+            fetched_min=12.0,
+            fetched_max=18.0,
+            inline_min_price="12.0",
+            min_adj=0.01,
+            max_adj=0.05,
+        )
+        payload.check_duplicate_listing_str = "1"
+        payload.duplicate_listing = 2
+        orch, sheet_eng, _ = _make_orchestrator([payload], adapter=DuplicateAppendAdapter())
+
+        await orch._run_one_round()
+
+        note = sheet_eng.written_logs[0][1]["note"]
+        assert "- Final Price:" in note
+        assert "Duplicate created: 1" in note
+
+    @pytest.mark.asyncio
+    async def test_duplicate_override_note_for_zero_offer_remain(self):
+        class DuplicateOverrideAdapter(ConfigurableMockAdapter):
+            async def resolve_payload_targets(self, payload):
+                raise ValueError("No owned listings matched search definition")
+
+            async def ensure_duplicate_listing_quota(self, payload, duplicate_price):
+                return DuplicateListingResult(
+                    override_note="0 OFFER REMAIN\nDuplicate skipped\nTarget: k=2, active=0\nReason: no active source listing"
+                )
+
+        payload = make_payload(
+            fetched_min=12.0,
+            fetched_max=18.0,
+            inline_min_price="12.0",
+        )
+        payload.check_duplicate_listing_str = "1"
+        payload.duplicate_listing = 2
+        orch, sheet_eng, _ = _make_orchestrator([payload], adapter=DuplicateOverrideAdapter())
+
+        await orch._run_one_round()
+
+        note = sheet_eng.written_logs[0][1]["note"]
+        assert note.startswith("0 OFFER REMAIN")
 
     @pytest.mark.asyncio
     async def test_multi_target_note_groups_identical_bodies(self):

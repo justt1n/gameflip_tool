@@ -48,6 +48,10 @@ async def main():
             gameflip_client,
             listings_dump_path=settings.GAMEFLIP_LISTINGS_DUMP_FILE,
             listings_index_path=settings.GAMEFLIP_LISTINGS_INDEX_FILE,
+            include_ready_products=settings.IS_GET_READY_PRODUCT,
+            skip_digital_goods_put=settings.IS_SKIP_DIGITAL_GOODS_PUT,
+            competitor_fetch_limit=settings.GAMEFLIP_COMPETITOR_FETCH_LIMIT,
+            seller_name_resolve_limit=settings.GAMEFLIP_SELLER_NAME_RESOLVE_LIMIT,
         ),
     }
 

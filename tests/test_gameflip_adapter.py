@@ -13,9 +13,15 @@ class StubGameflipClient:
         self.listings_by_id = {}
         self.search_results = []
         self.search_pages = None
+        self.search_all_kwargs = None
         self.patch_calls = []
         self.patch_failures = []
+        self.post_calls = []
+        self.post_failures = []
+        self.upload_photo_calls = []
         self.profile_display_names = {}
+        self.profile_calls = []
+        self._post_counter = 0
 
     async def listing_get(self, listing_id: str):
         value = self.listings_by_id[listing_id]
@@ -31,18 +37,25 @@ class StubGameflipClient:
         self.last_query = query
         return Result(self.search_results)
 
-    async def listing_search_all(self, query):
+    async def listing_search_all(self, query, max_pages=None, max_listings=None):
         class Result:
             def __init__(self, listings):
                 self.listings = listings
 
         self.last_query = query
+        self.search_all_kwargs = {"max_pages": max_pages, "max_listings": max_listings}
         if self.search_pages is None:
-            return Result(self.search_results)
+            listings = self.search_results
+            if max_listings is not None:
+                listings = listings[:max_listings]
+            return Result(listings)
 
         merged = []
         for page in self.search_pages:
             merged.extend(page)
+            if max_listings is not None and len(merged) >= max_listings:
+                merged = merged[:max_listings]
+                break
         return Result(merged)
 
     async def listing_patch(self, listing_id, operations, if_match=None):
@@ -65,11 +78,36 @@ class StubGameflipClient:
         self.listings_by_id[listing_id] = updated
         return updated
 
+    async def listing_post(self, query):
+        self.post_calls.append(query)
+        if self.post_failures:
+            failure = self.post_failures.pop(0)
+            if failure:
+                raise failure
+        self._post_counter += 1
+        listing_id = f"created-{self._post_counter}"
+        listing = GameflipListing.model_validate({
+            "id": listing_id,
+            "owner": self.owner_id,
+            "status": "draft",
+            "version": "1",
+            **query,
+        })
+        self.listings_by_id[listing_id] = listing
+        return listing
+
+    async def upload_photo_from_url(self, listing_id, source_url, display_order=None):
+        self.upload_photo_calls.append(
+            {"listing_id": listing_id, "source_url": source_url, "display_order": display_order}
+        )
+        return {"photo_id": f"photo-{len(self.upload_photo_calls)}"}
+
     async def get_owner_id(self):
         return self.owner_id
 
     async def profile_get(self, owner_id=None):
         owner = owner_id or self.owner_id
+        self.profile_calls.append(owner)
         return GameflipProfile(
             owner=owner,
             display_name=self.profile_display_names.get(owner),
@@ -247,6 +285,9 @@ class TestGameflipAdapter:
             listings_index_path=str(tmp_path / "owned_listings_index.json"),
         )
         payload = make_payload()
+        payload.product_name = "1B Gems | PET99"
+        payload.product_link = "1B Gems | PET99"
+        payload.product_id = "1B Gems | PET99"
         payload.product_compare = (
             "https://gameflip.com/shop/game-items?status=onsale&limit=36"
             "&term=5000%20Token&platform=roblox"
@@ -261,10 +302,37 @@ class TestGameflipAdapter:
         assert client.last_query["term"] == "5000 Token"
         assert client.last_query["platform"] == "roblox"
         assert client.last_query["status"] == "onsale"
-        assert client.last_query["limit"] == 36
+        assert client.last_query["limit"] == 15
 
     @pytest.mark.asyncio
-    async def test_prepare_pricing_input_merges_paginated_competitor_results(self, tmp_path):
+    async def test_prepare_pricing_input_applies_configured_competitor_fetch_limit(self, tmp_path):
+        client = StubGameflipClient()
+        mine = make_listing(upc=None, tags=[], name="1B Gems | PET99", platform="roblox")
+        client.listings_by_id[mine.id] = mine
+        client.search_results = [mine]
+        store = GameflipArtifactStore(
+            dump_path=str(tmp_path / "owned_listings_dump.json"),
+            index_path=str(tmp_path / "owned_listings_index.json"),
+        )
+        store.save_owned_listings([mine])
+        adapter = GameflipAdapter(
+            client,
+            listings_dump_path=str(tmp_path / "owned_listings_dump.json"),
+            listings_index_path=str(tmp_path / "owned_listings_index.json"),
+            competitor_fetch_limit=7,
+        )
+        payload = make_payload()
+        payload.product_name = "1B Gems | PET99"
+        payload.product_link = "1B Gems | PET99"
+        payload.product_id = "1B Gems | PET99"
+
+        target = (await adapter.resolve_payload_targets(payload))[0]
+        await adapter.prepare_pricing_input(target)
+
+        assert client.last_query["limit"] == 7
+
+    @pytest.mark.asyncio
+    async def test_prepare_pricing_input_uses_top_competitor_page_only(self, tmp_path):
         client = StubGameflipClient()
         mine = make_listing(upc=None, tags=[], name="1B Gems | PET99", platform="roblox")
         page_one_rival = make_listing(
@@ -286,7 +354,7 @@ class TestGameflipAdapter:
             price=1190,
         )
         client.listings_by_id[mine.id] = mine
-        client.search_pages = [[mine, page_one_rival], [page_two_rival]]
+        client.search_results = [mine, page_one_rival]
         store = GameflipArtifactStore(
             dump_path=str(tmp_path / "owned_listings_dump.json"),
             index_path=str(tmp_path / "owned_listings_index.json"),
@@ -305,7 +373,81 @@ class TestGameflipAdapter:
         target = (await adapter.resolve_payload_targets(payload))[0]
         prepared = await adapter.prepare_pricing_input(target)
 
-        assert [offer.seller_name for offer in prepared.competition.offers] == ["seller-b", "seller-a"]
+        assert [offer.seller_name for offer in prepared.competition.offers] == ["seller-a"]
+
+    @pytest.mark.asyncio
+    async def test_prepare_pricing_input_limits_seller_name_resolution_to_top_subset(self, tmp_path):
+        client = StubGameflipClient()
+        mine = make_listing(upc=None, tags=[], name="1B Gems | PET99", platform="roblox")
+        client.listings_by_id[mine.id] = mine
+        client.search_results = [mine] + [
+            make_listing(
+                id=f"00000000-0000-0000-0000-0000000000{i:02d}",
+                owner=f"seller-{i}",
+                upc=None,
+                tags=[],
+                name="1B Gems | PET99",
+                platform="roblox",
+                price=1100 + i,
+            )
+            for i in range(8)
+        ]
+        adapter = GameflipAdapter(
+            client,
+            listings_dump_path=str(tmp_path / "owned_listings_dump.json"),
+            listings_index_path=str(tmp_path / "owned_listings_index.json"),
+        )
+        GameflipArtifactStore(
+            dump_path=str(tmp_path / "owned_listings_dump.json"),
+            index_path=str(tmp_path / "owned_listings_index.json"),
+        ).save_owned_listings([mine])
+
+        payload = make_payload()
+        payload.product_name = "1B Gems | PET99"
+        payload.product_link = "1B Gems | PET99"
+        payload.product_id = "1B Gems | PET99"
+        target = (await adapter.resolve_payload_targets(payload))[0]
+        prepared = await adapter.prepare_pricing_input(target)
+
+        assert len(prepared.competition.offers) == 8
+        assert len(client.profile_calls) == 5
+
+    @pytest.mark.asyncio
+    async def test_prepare_pricing_input_applies_configured_seller_name_limit(self, tmp_path):
+        client = StubGameflipClient()
+        mine = make_listing(upc=None, tags=[], name="1B Gems | PET99", platform="roblox")
+        client.listings_by_id[mine.id] = mine
+        client.search_results = [mine] + [
+            make_listing(
+                id=f"10000000-0000-0000-0000-0000000000{i:02d}",
+                owner=f"seller-{i}",
+                upc=None,
+                tags=[],
+                name="1B Gems | PET99",
+                platform="roblox",
+                price=1100 + i,
+            )
+            for i in range(6)
+        ]
+        GameflipArtifactStore(
+            dump_path=str(tmp_path / "owned_listings_dump.json"),
+            index_path=str(tmp_path / "owned_listings_index.json"),
+        ).save_owned_listings([mine])
+        adapter = GameflipAdapter(
+            client,
+            listings_dump_path=str(tmp_path / "owned_listings_dump.json"),
+            listings_index_path=str(tmp_path / "owned_listings_index.json"),
+            seller_name_resolve_limit=2,
+        )
+        payload = make_payload()
+        payload.product_name = "1B Gems | PET99"
+        payload.product_link = "1B Gems | PET99"
+        payload.product_id = "1B Gems | PET99"
+
+        target = (await adapter.resolve_payload_targets(payload))[0]
+        await adapter.prepare_pricing_input(target)
+
+        assert len(client.profile_calls) == 2
 
     @pytest.mark.asyncio
     async def test_prepare_pricing_input_filters_competitors_by_feedback_min(self, tmp_path):
@@ -355,6 +497,48 @@ class TestGameflipAdapter:
         prepared = await adapter.prepare_pricing_input(target)
 
         assert [offer.seller_name for offer in prepared.competition.offers] == ["seller-b"]
+
+    @pytest.mark.asyncio
+    async def test_prepare_pricing_input_giftcard_url_uses_brand_slug_and_region(self, tmp_path):
+        client = StubGameflipClient()
+        mine = make_listing(
+            category="GIFTCARD",
+            platform="xbox_live",
+            digital=False,
+            digital_region="TR",
+            upc=None,
+            tags=["type: giftcard", "currency: TRY"],
+            name="₺100.00 TRY Xbox Gift Card",
+        )
+        client.listings_by_id[mine.id] = mine
+        client.search_results = [mine]
+        store = GameflipArtifactStore(
+            dump_path=str(tmp_path / "owned_listings_dump.json"),
+            index_path=str(tmp_path / "owned_listings_index.json"),
+        )
+        store.save_owned_listings([mine])
+        adapter = GameflipAdapter(
+            client,
+            listings_dump_path=str(tmp_path / "owned_listings_dump.json"),
+            listings_index_path=str(tmp_path / "owned_listings_index.json"),
+        )
+        payload = make_payload()
+        payload.product_name = "₺100.00 TRY Xbox Gift Card"
+        payload.product_link = "₺100.00 TRY Xbox Gift Card"
+        payload.product_compare = (
+            "https://gameflip.com/shop/gift-cards/xbox-gift-card?status=onsale&limit=36"
+            "&sort=price%3Aasc&term=&digital_region=TR%2Ctr&tags=currency%3A%20TRY"
+        )
+        payload.product_id = payload.product_compare
+        payload.category_name = "Gift Card"
+        payload.game_name = "Xbox Gift Card"
+
+        target = (await adapter.resolve_payload_targets(payload))[0]
+        await adapter.prepare_pricing_input(target)
+
+        assert client.last_query["platform"] == "xbox_live"
+        assert client.last_query["digital_region"] == "TR,tr"
+        assert client.last_query["term"] == "₺100.00 TRY Xbox Gift Card"
 
     @pytest.mark.asyncio
     async def test_update_price_sends_patch_in_cents(self, tmp_path):
@@ -501,3 +685,202 @@ class TestGameflipAdapter:
             [{"op": "replace", "path": "/price", "value": 1000}],
             [{"op": "replace", "path": "/status", "value": "onsale"}],
         ]
+
+    @pytest.mark.asyncio
+    async def test_duplicate_listing_creates_missing_non_digital_offers(self, tmp_path):
+        client = StubGameflipClient()
+        source = make_listing(
+            digital=False,
+            status="onsale",
+            version="7",
+            price=1234,
+            photo={},
+        )
+        client.listings_by_id[source.id] = source
+        client.search_results = [source]
+        adapter = GameflipAdapter(
+            client,
+            listings_dump_path=str(tmp_path / "owned_listings_dump.json"),
+            listings_index_path=str(tmp_path / "owned_listings_index.json"),
+        )
+        payload = make_payload()
+        payload.check_duplicate_listing_str = "1"
+        payload.duplicate_listing = 3
+
+        result = await adapter.ensure_duplicate_listing_quota(payload, 19.5)
+
+        assert "Duplicate created: 2" in result.append_note
+        assert len(client.post_calls) == 2
+        assert all(call["price"] == 1950 for call in client.post_calls)
+
+    @pytest.mark.asyncio
+    async def test_duplicate_listing_retries_publish_once_on_version_conflict(self, tmp_path):
+        client = StubGameflipClient()
+        source = make_listing(
+            digital=False,
+            status="onsale",
+            version="7",
+            price=1234,
+            photo={},
+        )
+        client.listings_by_id[source.id] = source
+        client.search_results = [source]
+        client.patch_failures = [GameflipAPIError("If-Match failed", 412), None]
+        adapter = GameflipAdapter(
+            client,
+            listings_dump_path=str(tmp_path / "owned_listings_dump.json"),
+            listings_index_path=str(tmp_path / "owned_listings_index.json"),
+        )
+        payload = make_payload()
+        payload.check_duplicate_listing_str = "1"
+        payload.duplicate_listing = 2
+
+        result = await adapter.ensure_duplicate_listing_quota(payload, 19.5)
+
+        assert "Duplicate created: 1" in result.append_note
+        assert len(client.patch_calls) == 2
+        assert client.patch_calls[0]["if_match"] == "1"
+        assert client.patch_calls[1]["if_match"] == "1"
+
+    @pytest.mark.asyncio
+    async def test_duplicate_listing_skips_when_source_is_digital(self, tmp_path):
+        client = StubGameflipClient()
+        source = make_listing(digital=True, status="onsale", photo={})
+        client.listings_by_id[source.id] = source
+        client.search_results = [source]
+        adapter = GameflipAdapter(
+            client,
+            listings_dump_path=str(tmp_path / "owned_listings_dump.json"),
+            listings_index_path=str(tmp_path / "owned_listings_index.json"),
+        )
+        payload = make_payload()
+        payload.check_duplicate_listing_str = "1"
+        payload.duplicate_listing = 2
+
+        result = await adapter.ensure_duplicate_listing_quota(payload, 19.5)
+
+        assert "digital listing requires digital_goods_put" in result.append_note
+        assert client.post_calls == []
+
+    @pytest.mark.asyncio
+    async def test_duplicate_listing_can_attempt_digital_source_when_skip_flag_disabled(self, tmp_path):
+        client = StubGameflipClient()
+        source = make_listing(digital=True, status="onsale", photo={})
+        client.listings_by_id[source.id] = source
+        client.search_results = [source]
+        adapter = GameflipAdapter(
+            client,
+            listings_dump_path=str(tmp_path / "owned_listings_dump.json"),
+            listings_index_path=str(tmp_path / "owned_listings_index.json"),
+            skip_digital_goods_put=False,
+        )
+        payload = make_payload()
+        payload.check_duplicate_listing_str = "1"
+        payload.duplicate_listing = 2
+
+        result = await adapter.ensure_duplicate_listing_quota(payload, 19.5)
+
+        assert "digital listing requires digital_goods_put" not in (result.append_note or "")
+        assert len(client.post_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_duplicate_listing_overrides_note_when_no_active_offer_remains(self, tmp_path):
+        client = StubGameflipClient()
+        client.search_results = []
+        adapter = GameflipAdapter(
+            client,
+            listings_dump_path=str(tmp_path / "owned_listings_dump.json"),
+            listings_index_path=str(tmp_path / "owned_listings_index.json"),
+        )
+        payload = make_payload()
+        payload.check_duplicate_listing_str = "1"
+        payload.duplicate_listing = 2
+
+        result = await adapter.ensure_duplicate_listing_quota(payload, 19.5)
+
+        assert result.override_note == "\n".join([
+            "0 OFFER REMAIN",
+            "Duplicate skipped",
+            "Target: k=2, active=0",
+            "Reason: no active source listing",
+        ])
+
+    @pytest.mark.asyncio
+    async def test_duplicate_listing_ignores_ready_when_flag_is_false(self, tmp_path):
+        client = StubGameflipClient()
+        ready_listing = make_listing(digital=False, status="ready", photo={})
+        client.listings_by_id[ready_listing.id] = ready_listing
+        client.search_results = [ready_listing]
+        adapter = GameflipAdapter(
+            client,
+            listings_dump_path=str(tmp_path / "owned_listings_dump.json"),
+            listings_index_path=str(tmp_path / "owned_listings_index.json"),
+            include_ready_products=False,
+        )
+        payload = make_payload()
+        payload.check_duplicate_listing_str = "1"
+        payload.duplicate_listing = 2
+
+        result = await adapter.ensure_duplicate_listing_quota(payload, 19.5)
+
+        assert "0 OFFER REMAIN" in result.override_note
+        assert client.last_query["status"] == "onsale"
+
+    @pytest.mark.asyncio
+    async def test_duplicate_listing_includes_ready_when_flag_is_true(self, tmp_path):
+        client = StubGameflipClient()
+        ready_listing = make_listing(digital=False, status="ready", photo={})
+        client.listings_by_id[ready_listing.id] = ready_listing
+        client.search_results = [ready_listing]
+        adapter = GameflipAdapter(
+            client,
+            listings_dump_path=str(tmp_path / "owned_listings_dump.json"),
+            listings_index_path=str(tmp_path / "owned_listings_index.json"),
+            include_ready_products=True,
+        )
+        payload = make_payload()
+        payload.check_duplicate_listing_str = "1"
+        payload.duplicate_listing = 2
+
+        result = await adapter.ensure_duplicate_listing_quota(payload, 19.5)
+
+        assert "Duplicate created: 1" in result.append_note
+        assert client.last_query["status"] in {"ready,onsale", "onsale,ready"}
+        assert client.search_all_kwargs["max_listings"] == 2
+
+    @pytest.mark.asyncio
+    async def test_duplicate_listing_skips_invalid_target_value(self, tmp_path):
+        client = StubGameflipClient()
+        adapter = GameflipAdapter(
+            client,
+            listings_dump_path=str(tmp_path / "owned_listings_dump.json"),
+            listings_index_path=str(tmp_path / "owned_listings_index.json"),
+        )
+        payload = make_payload()
+        payload.check_duplicate_listing_str = "1"
+        payload.duplicate_listing = 0
+
+        result = await adapter.ensure_duplicate_listing_quota(payload, 19.5)
+
+        assert "invalid DUPLICATE_LISTING value" in result.append_note
+
+    @pytest.mark.asyncio
+    async def test_duplicate_listing_reports_partial_failure(self, tmp_path):
+        client = StubGameflipClient()
+        source = make_listing(digital=False, status="onsale", photo={})
+        client.listings_by_id[source.id] = source
+        client.search_results = [source]
+        client.post_failures = [None, RuntimeError("boom")]
+        adapter = GameflipAdapter(
+            client,
+            listings_dump_path=str(tmp_path / "owned_listings_dump.json"),
+            listings_index_path=str(tmp_path / "owned_listings_index.json"),
+        )
+        payload = make_payload()
+        payload.check_duplicate_listing_str = "1"
+        payload.duplicate_listing = 3
+
+        result = await adapter.ensure_duplicate_listing_quota(payload, 19.5)
+
+        assert "Duplicate partial failure" in result.append_note
+        assert "created=1" in result.append_note

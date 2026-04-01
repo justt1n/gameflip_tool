@@ -109,12 +109,12 @@ class TestGetPayloads:
                 "2LAI", "CHECK", "Product_name", "Note", "Last Update", "Product_link",
                 "PRODUCT_COMPARE", "Compare mode", "INCLUDE_KEYWORD", "EXCLUDE_KEYWORD",
                 "CATEGORY", "GAME", "DONGIAGIAM_MIN", "DONGIAGIAM_MAX", "DONGIA_LAMTRON",
-                "FEEDBACK",
+                "FEEDBACK", "CHECK_DUPLICATE_LISTING", "DUPLICATE_LISTING",
             ],
             [
                 "TRUE", "1", "Live Product", "", "", "Gems",
                 "https://gameflip.com/shop/game-items?term=gems", "1", "gems", "deluxe",
-                "Game Item", "Pet Simulator 99", "0.01", "0.05", "2", "100",
+                "Game Item", "Pet Simulator 99", "0.01", "0.05", "2", "100", "1", "4",
             ],
         ])
         engine = SheetEngine(client, settings)
@@ -124,6 +124,8 @@ class TestGetPayloads:
         assert len(payloads) == 1
         assert payloads[0].is_compare_enabled_str == "1"
         assert payloads[0].feedback_min == 100
+        assert payloads[0].is_duplicate_listing_enabled is True
+        assert payloads[0].duplicate_listing_target == 4
         assert payloads[0].game_name == "Pet Simulator 99"
 
 

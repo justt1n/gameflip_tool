@@ -68,6 +68,7 @@ class GameflipArtifactStore:
             "description": listing.description,
             "category": listing.category,
             "platform": listing.platform,
+            "digital_region": listing.digital_region,
             "upc": listing.upc,
             "status": listing.status,
             "tags": listing.tags or [],
@@ -81,6 +82,7 @@ class GameflipArtifactStore:
             listing.description or "",
             normalize_category(listing.category) or "",
             normalize_platform(listing.platform) or "",
+            listing.digital_region or "",
             " ".join(listing.tags or []),
         ]
         return OwnedListingIndexEntry(
@@ -89,6 +91,7 @@ class GameflipArtifactStore:
             name=listing.name,
             category=normalize_category(listing.category),
             platform=normalize_platform(listing.platform),
+            digital_region=listing.digital_region,
             upc=listing.upc,
             status=normalize_status(listing.status),
             tags=list(listing.tags or []),

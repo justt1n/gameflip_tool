@@ -171,6 +171,53 @@ class TestProcess:
         assert result.final_price.price == 10.02
 
     @pytest.mark.asyncio
+    async def test_mode_1_without_eligible_competitor_uses_exact_max_price(self, engine):
+        competitors = [
+            StandardCompetitorOffer(seller_name="too-cheap", price=5.0, is_eligible=False),
+        ]
+        p = _make_payload(
+            compare="1",
+            min_adj=0.01,
+            max_adj=0.05,
+            fetched_min=0.772,
+            fetched_max=0.851,
+            inline_min="0.772",
+        )
+        prepared = make_prepared_input(p, my_price=0.840, competitors=competitors)
+
+        result = await engine.process(prepared)
+
+        assert result.status == 1
+        assert result.final_price.name == "Max price (fallback)"
+        assert result.final_price.price == 0.851
+
+    @pytest.mark.asyncio
+    async def test_mode_1_without_eligible_competitor_ignores_sheet_sources(self, engine):
+        competitors = [
+            StandardCompetitorOffer(seller_name="too-cheap", price=5.0, is_eligible=False),
+        ]
+        p = _make_payload(
+            compare="1",
+            min_adj=0.01,
+            max_adj=0.01,
+            fetched_min=8.00,
+            fetched_max=18.00,
+            inline_min="8.00",
+        )
+        p.ss1_check = "1"
+        p.ss1_profit = 18
+        p.ss1_hesonhan = 0.85
+        p.ss1_quydoidonvi = 1
+        p.fetched_ss1_price = 10.0
+        prepared = make_prepared_input(p, my_price=15.0, competitors=competitors)
+
+        result = await engine.process(prepared)
+
+        assert result.status == 1
+        assert result.final_price.name == "Max price (fallback)"
+        assert result.final_price.price == 18.00
+
+    @pytest.mark.asyncio
     async def test_no_min_price_skips(self, engine):
         competitors = [
             StandardCompetitorOffer(seller_name="rival", price=14.20, is_eligible=True)

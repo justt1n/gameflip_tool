@@ -63,8 +63,26 @@ GAMEFLIP_SHOP_PATH_CATEGORY_ALIASES: dict[str, str] = {
     "movies": GAMEFLIP_CATEGORIES["VIDEO"],
 }
 
+GAMEFLIP_GIFTCARD_PRODUCT_SLUG_PLATFORM_ALIASES: dict[str, str] = {
+    "apple-gift-card": "apple",
+    "google-play-gift-card": "google",
+    "amazon-gift-card": "amazon",
+    "xbox-gift-card": "xbox_live",
+    "xbox-live-gift-card": "xbox_live",
+    "playstation-gift-card": "playstation_network",
+    "playstation-network-gift-card": "playstation_network",
+    "steam-gift-card": "steam",
+    "steam-wallet-gift-card": "steam",
+}
+
 GAMEFLIP_PLATFORM_ALIASES: dict[str, str] = {
+    "apple": "apple",
+    "amazon": "amazon",
+    "google": "google",
+    "google play": "google",
     "playstation": "playstation",
+    "playstation network": "playstation_network",
+    "psn": "playstation_network",
     "ps": "playstation",
     "ps1": "playstation",
     "ps2": "playstation_2",
@@ -72,6 +90,8 @@ GAMEFLIP_PLATFORM_ALIASES: dict[str, str] = {
     "ps4": "playstation_4",
     "ps5": "playstation_5",
     "xbox": "xbox",
+    "xbox live": "xbox_live",
+    "xbox gift card": "xbox_live",
     "x360": "xbox_360",
     "xbox 360": "xbox_360",
     "xone": "xbox_one",
@@ -111,6 +131,12 @@ def normalize_shop_category_slug(slug: Optional[str]) -> Optional[str]:
     if not slug:
         return None
     return GAMEFLIP_SHOP_PATH_CATEGORY_ALIASES.get(slug.strip().lower())
+
+
+def normalize_giftcard_product_slug_platform(slug: Optional[str]) -> Optional[str]:
+    if not slug:
+        return None
+    return GAMEFLIP_GIFTCARD_PRODUCT_SLUG_PLATFORM_ALIASES.get(slug.strip().lower())
 
 
 def normalize_platform(value: Optional[str]) -> Optional[str]:

@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     GAMEFLIP_API_SECRET: str = ""
     GAMEFLIP_BASE_URL: str = "https://production-gameflip.fingershock.com/api/v1"
     GAMEFLIP_OWNER_ID: Optional[str] = None
+    IS_GET_READY_PRODUCT: bool = False
+    IS_SKIP_DIGITAL_GOODS_PUT: bool = False
+    GAMEFLIP_COMPETITOR_FETCH_LIMIT: int = 15
+    GAMEFLIP_SELLER_NAME_RESOLVE_LIMIT: int = 5
     GAMEFLIP_RUNTIME_DATA_DIR: Optional[str] = None
     GAMEFLIP_LISTINGS_DUMP_PATH: Optional[str] = None
     GAMEFLIP_LISTINGS_INDEX_PATH: Optional[str] = None

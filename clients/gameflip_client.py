@@ -1,3 +1,5 @@
+import asyncio
+import time
 from typing import Any, Optional
 from urllib.parse import urljoin, urlparse
 
@@ -24,6 +26,11 @@ class GameflipAPIError(RuntimeError):
 class GameflipClient:
     """Minimal async Gameflip client for repricing flows."""
 
+    RATE_LIMIT_RETRY_ATTEMPTS = 8
+    RATE_LIMIT_RETRY_BASE_DELAY = 5.0
+    RATE_LIMIT_RETRY_MAX_DELAY = 30.0
+    REQUEST_MIN_INTERVAL_SECONDS = 1.0
+
     def __init__(
         self,
         base_url: str,
@@ -35,6 +42,8 @@ class GameflipClient:
         self.origin = f"{parsed.scheme}://{parsed.netloc}/"
         self.auth_handler = auth_handler
         self._owner_id = owner_id
+        self._request_lock = asyncio.Lock()
+        self._last_request_started_at = 0.0
         self._client = httpx.AsyncClient(
             base_url=self.base_url + "/",
             timeout=60,
@@ -85,6 +94,7 @@ class GameflipClient:
         self,
         query: dict[str, Any],
         max_pages: Optional[int] = None,
+        max_listings: Optional[int] = None,
     ) -> GameflipSearchResult:
         params = dict(query)
         params["v2"] = True
@@ -104,6 +114,9 @@ class GameflipClient:
             page_items = data if isinstance(data, list) else data.get("listings", [])
             listings.extend(GameflipListing.model_validate(item) for item in page_items)
             page_count += 1
+            if max_listings is not None and len(listings) >= max_listings:
+                listings = listings[:max_listings]
+                break
             if not next_page:
                 break
             if max_pages is not None and page_count >= max_pages:
@@ -114,6 +127,10 @@ class GameflipClient:
             next_page=next_page,
             raw=raw_pages,
         )
+
+    async def listing_post(self, query: dict[str, Any]) -> GameflipListing:
+        data, _ = await self._request("POST", "listing", json_data=query)
+        return GameflipListing.model_validate(data)
 
     async def list_owned_listings(
         self,
@@ -161,6 +178,41 @@ class GameflipClient:
         )
         return GameflipListing.model_validate(data)
 
+    async def upload_photo_from_url(
+        self,
+        listing_id: str,
+        source_url: str,
+        display_order: Optional[int] = None,
+    ) -> dict[str, Any]:
+        photo_obj, _ = await self._request("POST", f"listing/{listing_id}/photo")
+        upload_url = (photo_obj or {}).get("upload_url")
+        photo_id = (photo_obj or {}).get("id")
+        if not upload_url or not photo_id:
+            raise RuntimeError("Gameflip photo upload URL missing from API response")
+
+        response = await self._client.get(source_url)
+        response.raise_for_status()
+        mime_type = response.headers.get("content-type", "image/jpeg").split(";", 1)[0]
+
+        upload_response = await self._client.put(
+            upload_url,
+            content=response.content,
+            headers={"Content-Type": mime_type},
+        )
+        upload_response.raise_for_status()
+
+        patch_ops: list[dict[str, Any]] = [
+            {"op": "replace", "path": f"/photo/{photo_id}/status", "value": "active"},
+        ]
+        if display_order is None:
+            patch_ops.append({"op": "replace", "path": "/cover_photo", "value": photo_id})
+        else:
+            patch_ops.append(
+                {"op": "replace", "path": f"/photo/{photo_id}/display_order", "value": display_order}
+            )
+        patched = await self.listing_patch(listing_id, patch_ops)
+        return {"photo_id": photo_id, "listing": patched}
+
     async def close(self):
         await self._client.aclose()
         await self.auth_handler.close()
@@ -173,28 +225,39 @@ class GameflipClient:
         json_data: Optional[Any] = None,
         headers: Optional[dict[str, str]] = None,
     ) -> tuple[Any, Optional[str]]:
-        auth_headers = await self.auth_handler.get_auth_headers()
-        response = await self._client.request(
-            method=method,
-            url=self._build_url(endpoint),
-            params=params,
-            json=json_data,
-            headers={**auth_headers, **(headers or {})},
-        )
+        for attempt in range(1, self.RATE_LIMIT_RETRY_ATTEMPTS + 1):
+            async with self._request_lock:
+                await self._sleep_for_request_spacing()
+                auth_headers = await self.auth_handler.get_auth_headers()
+                self._last_request_started_at = time.monotonic()
+                response = await self._client.request(
+                    method=method,
+                    url=self._build_url(endpoint),
+                    params=params,
+                    json=json_data,
+                    headers={**auth_headers, **(headers or {})},
+                )
 
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            response.raise_for_status()
-            raise RuntimeError(f"Non-JSON response from Gameflip: {response.text}") from exc
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                response.raise_for_status()
+                raise RuntimeError(f"Non-JSON response from Gameflip: {response.text}") from exc
 
-        if response.status_code >= 400 or payload.get("status") != "SUCCESS":
+            if response.status_code < 400 and payload.get("status") == "SUCCESS":
+                return payload.get("data"), payload.get("next_page")
+
             error = GameflipApiError.model_validate(
                 payload.get("error") or {"message": response.text, "code": response.status_code}
             )
-            raise GameflipAPIError(error.message, error.code)
-
-        return payload.get("data"), payload.get("next_page")
+            gameflip_error = GameflipAPIError(error.message, error.code)
+            if attempt < self.RATE_LIMIT_RETRY_ATTEMPTS and self._is_rate_limited(
+                gameflip_error,
+                response.status_code,
+            ):
+                await asyncio.sleep(self._retry_delay_seconds(attempt))
+                continue
+            raise gameflip_error
 
     def _build_url(self, endpoint: str) -> str:
         if endpoint.startswith(("http://", "https://")):
@@ -202,3 +265,23 @@ class GameflipClient:
         if endpoint.startswith("/api/"):
             return urljoin(self.origin, endpoint.lstrip("/"))
         return urljoin(self.base_url + "/", endpoint.lstrip("/"))
+
+    @staticmethod
+    def _is_rate_limited(exc: GameflipAPIError, status_code: int | None) -> bool:
+        message = str(exc).lower()
+        return (
+            status_code == 429
+            or exc.code == 429
+            or "too many attempts" in message
+            or "retry later" in message
+            or "rate limit" in message
+        )
+
+    async def _sleep_for_request_spacing(self) -> None:
+        elapsed = time.monotonic() - self._last_request_started_at
+        remaining = self.REQUEST_MIN_INTERVAL_SECONDS - elapsed
+        if remaining > 0:
+            await asyncio.sleep(remaining)
+
+    def _retry_delay_seconds(self, attempt: int) -> float:
+        return min(self.RATE_LIMIT_RETRY_BASE_DELAY * attempt, self.RATE_LIMIT_RETRY_MAX_DELAY)

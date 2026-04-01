@@ -8,6 +8,7 @@ from clients.gameflip_client import GameflipClient
 from constants.gameflip_constants import (
     GAMEFLIP_DEFAULT_LISTING_STATUS,
     normalize_category,
+    normalize_giftcard_product_slug_platform,
     normalize_platform,
     normalize_shop_category_slug,
     normalize_status,
@@ -23,6 +24,7 @@ class ListingSearchDefinition(BaseModel):
     term: Optional[str] = None
     platform: Optional[str] = None
     category: Optional[str] = None
+    digital_region: Optional[str] = None
     status: Optional[str] = None
     tags: list[str] = Field(default_factory=list)
     include_keywords: list[str] = Field(default_factory=list)
@@ -108,6 +110,7 @@ class GameflipListingResolver:
                 term=parsed_search["term"],
                 platform=parsed_search["platform"],
                 category=parsed_search["category"],
+                digital_region=parsed_search["digital_region"],
                 status=parsed_search["status"],
                 tags=parsed_search["tags"],
                 include_keywords=include_keywords,
@@ -150,6 +153,11 @@ class GameflipListingResolver:
             candidates = [
                 listing for listing in candidates
                 if normalize_category(listing.category) == definition.category
+            ]
+        if definition.digital_region:
+            candidates = [
+                listing for listing in candidates
+                if self._listing_matches_digital_region(listing, definition.digital_region)
             ]
         if definition.tags:
             required_tags = {tag.lower() for tag in definition.tags}
@@ -208,16 +216,70 @@ class GameflipListingResolver:
                 continue
 
             query = parse_qs(parsed.query)
-            path_slug = parsed.path.rstrip("/").split("/")[-1]
+            segments = [segment for segment in parsed.path.rstrip("/").split("/") if segment]
+            path_slug = segments[-1] if segments else None
+            category = normalize_category((payload.category_name or "").strip()) or normalize_shop_category_slug(path_slug)
+            platform = normalize_platform(cls._first(query, "platform"))
+            if not platform and category == "GIFTCARD":
+                platform = normalize_giftcard_product_slug_platform(path_slug)
+            term = cls._first(query, "term") or cls._shop_product_term(segments)
+            term = cls._effective_sheet_term(payload, category, platform, term)
             return {
-                "term": cls._first(query, "term"),
-                "platform": normalize_platform(cls._first(query, "platform")),
-                "category": normalize_category((payload.category_name or "").strip())
-                or normalize_shop_category_slug(path_slug),
+                "term": term,
+                "platform": platform,
+                "category": category,
+                "digital_region": cls._first(query, "digital_region"),
                 "status": normalize_status(cls._first(query, "status")),
                 "tags": cls._split_tags(cls._first(query, "tags")),
             }
         return None
+
+    @staticmethod
+    def _shop_product_term(segments: list[str]) -> Optional[str]:
+        if len(segments) < 3:
+            return None
+        slug = segments[-1].strip().lower()
+        if not slug:
+            return None
+        return slug.replace("-", " ")
+
+    @classmethod
+    def _effective_sheet_term(
+        cls,
+        payload: Payload,
+        category: Optional[str],
+        platform: Optional[str],
+        current_term: Optional[str],
+    ) -> Optional[str]:
+        if category != "GIFTCARD":
+            return current_term
+
+        fallback_term = cls._giftcard_name_term(payload)
+        if not fallback_term:
+            return current_term
+        if not current_term:
+            return fallback_term
+        if cls._term_has_numeric_signal(current_term):
+            return current_term
+        if cls._phrase_matches(fallback_term, current_term):
+            return fallback_term
+        if platform and cls._phrase_matches(fallback_term, platform.replace("_", " ")):
+            return fallback_term
+        return current_term
+
+    @classmethod
+    def _giftcard_name_term(cls, payload: Payload) -> Optional[str]:
+        for candidate in ((payload.product_link or "").strip(), (payload.product_name or "").strip()):
+            if not candidate or candidate.startswith("http"):
+                continue
+            if cls._term_has_numeric_signal(candidate):
+                return candidate
+        return None
+
+    @classmethod
+    def _term_has_numeric_signal(cls, value: Optional[str]) -> bool:
+        tokens = cls._tokenize(value or "")
+        return any(token.isdigit() for token in tokens)
 
     @staticmethod
     def _split_keywords(value: Optional[str]) -> list[str]:
@@ -252,6 +314,18 @@ class GameflipListingResolver:
     @staticmethod
     def _tokenize(value: str) -> list[str]:
         return re.findall(r"[a-z0-9]+", (value or "").lower())
+
+    @classmethod
+    def _listing_matches_digital_region(
+        cls,
+        listing: OwnedListingIndexEntry,
+        digital_region: str,
+    ) -> bool:
+        regions = [cls._normalize_word(part.strip().lower()) for part in (digital_region or "").split(",") if part.strip()]
+        if not regions:
+            return True
+        listing_tokens = set(cls._tokenize(listing.search_text))
+        return any(region in listing_tokens for region in regions)
 
     @classmethod
     def _tokens_match(cls, query_token: str, text_token: str) -> bool:

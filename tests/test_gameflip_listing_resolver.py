@@ -32,14 +32,17 @@ class StubResolverClient:
     async def get_owner_id(self):
         return self.owner_id
 
-    async def listing_search_all(self, query):
+    async def listing_search_all(self, query, max_pages=None, max_listings=None):
         self.last_query = query
 
         class Result:
             def __init__(self, listings):
                 self.listings = listings
 
-        return Result(self.listings)
+        listings = self.listings
+        if max_listings is not None:
+            listings = listings[:max_listings]
+        return Result(listings)
 
     async def listing_get(self, listing_id):
         for listing in self.listings:
@@ -245,6 +248,90 @@ class TestGameflipListingResolver:
         assert client.last_query["platform"] == "apple"
         stored = artifact_store.load_owned_listings_index()
         assert [entry.id for entry in stored] == [live_listing.id]
+
+    @pytest.mark.asyncio
+    async def test_resolve_giftcard_url_prefers_brand_and_region_not_just_currency(self, tmp_path):
+        listings = [
+            make_owned_listing(
+                id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                category="GIFTCARD",
+                platform="apple",
+                digital_region="TR",
+                name="₺100.00 TRY Apple",
+                description="Apple gift card TR",
+                tags=["type: giftcard", "currency: TRY"],
+            ),
+            make_owned_listing(
+                id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                category="GIFTCARD",
+                platform="xbox_live",
+                digital_region="TR",
+                name="₺100.00 TRY Xbox Gift Card",
+                description="Xbox gift card TR",
+                tags=["type: giftcard", "currency: TRY"],
+            ),
+        ]
+        artifact_store = GameflipArtifactStore(
+            dump_path=str(tmp_path / "owned_listings.json"),
+            index_path=str(tmp_path / "owned_listings_index.json"),
+        )
+        artifact_store.save_owned_listings(listings)
+        resolver = GameflipListingResolver(artifact_store)
+
+        payload = make_payload(product_id="")
+        payload.product_compare = (
+            "https://gameflip.com/shop/gift-cards/xbox-gift-card?status=onsale&limit=36"
+            "&sort=price%3Aasc&term=&digital_region=TR%2Ctr&tags=currency%3A%20TRY"
+        )
+        payload.category_name = "Gift Card"
+        payload.game_name = "Xbox Gift Card"
+
+        matches = await resolver.resolve_payload(payload)
+
+        assert [listing.listing_id for listing in matches] == ["bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"]
+
+    @pytest.mark.asyncio
+    async def test_resolve_giftcard_url_falls_back_to_sheet_name_for_denomination(self, tmp_path):
+        listings = [
+            make_owned_listing(
+                id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                category="GIFTCARD",
+                platform="xbox_live",
+                digital_region="TR",
+                name="₺25.00 TRY Xbox Gift Card",
+                description="Xbox gift card TR 25",
+                tags=["type: giftcard", "currency: TRY"],
+            ),
+            make_owned_listing(
+                id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                category="GIFTCARD",
+                platform="xbox_live",
+                digital_region="TR",
+                name="₺100.00 TRY Xbox Gift Card",
+                description="Xbox gift card TR 100",
+                tags=["type: giftcard", "currency: TRY"],
+            ),
+        ]
+        artifact_store = GameflipArtifactStore(
+            dump_path=str(tmp_path / "owned_listings.json"),
+            index_path=str(tmp_path / "owned_listings_index.json"),
+        )
+        artifact_store.save_owned_listings(listings)
+        resolver = GameflipListingResolver(artifact_store)
+
+        payload = make_payload(product_id="")
+        payload.product_name = "₺100.00 TRY Xbox Gift Card"
+        payload.product_link = "₺100.00 TRY Xbox Gift Card"
+        payload.product_compare = (
+            "https://gameflip.com/shop/gift-cards/xbox-gift-card?status=onsale&limit=36"
+            "&sort=price%3Aasc&term=&digital_region=TR%2Ctr&tags=currency%3A%20TRY"
+        )
+        payload.category_name = "Gift Card"
+        payload.game_name = "Xbox Gift Card"
+
+        matches = await resolver.resolve_payload(payload)
+
+        assert [listing.listing_id for listing in matches] == ["bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"]
 
     @pytest.mark.asyncio
     async def test_numeric_term_does_not_match_larger_number_substring(self, tmp_path):

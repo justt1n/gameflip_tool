@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Optional
 
-from models.runtime_models import PreparedPricingInput, ResolvedListingTarget
+from models.runtime_models import DuplicateListingResult, PreparedPricingInput, ResolvedListingTarget
 
 
 class IMarketplaceAdapter(ABC):
@@ -32,3 +32,10 @@ class IMarketplaceAdapter(ABC):
 
     async def close(self):
         pass
+
+    async def ensure_duplicate_listing_quota(
+        self,
+        payload,
+        duplicate_price: float | None,
+    ) -> DuplicateListingResult:
+        return DuplicateListingResult()

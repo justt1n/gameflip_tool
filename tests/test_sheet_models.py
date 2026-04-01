@@ -106,7 +106,7 @@ class TestPayloadFromRow:
         assert payload.max_price_location.cell == "C5"
 
     def test_from_requirement_row_maps_gameflip_search_fields(self):
-        row = [""] * 69
+        row = [""] * 72
         row[0] = "TRUE"
         row[1] = "1"
         row[2] = "Blade Ball Row"
@@ -119,18 +119,21 @@ class TestPayloadFromRow:
         row[11] = "0.001"
         row[12] = "0.002"
         row[13] = "3"
-        row[17] = "sheet_min_id"
-        row[18] = "MinSheet"
-        row[19] = "A1"
-        row[23] = "sheet_max_id"
-        row[24] = "MaxSheet"
-        row[25] = "B1"
-        row[29] = "sheet_stock_id"
-        row[30] = "StockSheet"
-        row[31] = "C1"
-        row[38] = "sheet_blacklist_id"
-        row[39] = "BlacklistSheet"
-        row[40] = "D1:D"
+        row[15] = "100"
+        row[16] = "1"
+        row[17] = "5"
+        row[19] = "sheet_min_id"
+        row[20] = "MinSheet"
+        row[21] = "A1"
+        row[25] = "sheet_max_id"
+        row[26] = "MaxSheet"
+        row[27] = "B1"
+        row[31] = "sheet_stock_id"
+        row[32] = "StockSheet"
+        row[33] = "C1"
+        row[40] = "sheet_blacklist_id"
+        row[41] = "BlacklistSheet"
+        row[42] = "D1:D"
 
         payload = Payload.from_row(row, row_index=8)
 
@@ -143,6 +146,9 @@ class TestPayloadFromRow:
         assert payload.exclude_keyword == "Deluxe"
         assert payload.category_name == "Game Item"
         assert payload.game_name == "Blade Ball"
+        assert payload.feedback_min == 100
+        assert payload.is_duplicate_listing_enabled is True
+        assert payload.duplicate_listing_target == 5
         assert payload.min_price_location.sheet_id == "sheet_min_id"
         assert payload.max_price_location.sheet_id == "sheet_max_id"
         assert payload.stock_location.sheet_id == "sheet_stock_id"
@@ -153,13 +159,14 @@ class TestPayloadFromRow:
             "2LAI", "CHECK", "Product_name", "Note", "Last Update", "Product_link",
             "PRODUCT_COMPARE", "Compare mode", "INCLUDE_KEYWORD", "EXCLUDE_KEYWORD",
             "CATEGORY", "GAME", "DONGIAGIAM_MIN", "DONGIAGIAM_MAX", "DONGIA_LAMTRON",
-            "FEEDBACK", "IDSheet_min", "Sheet_min", "Cell_min",
+            "FEEDBACK", "CHECK_DUPLICATE_LISTING", "DUPLICATE_LISTING",
+            "IDSheet_min", "Sheet_min", "Cell_min",
         ]
         row = [
             "TRUE", "1", "Blade Ball Row", "", "", "5000 Tokens | Blade Ball",
             "https://gameflip.com/shop/game-items?status=onsale&term=5000%20Token",
             "2", "5000 Token", "Deluxe", "Game Item", "Blade Ball",
-            "0.001", "0.002", "3", "100", "sheet_min_id", "MinSheet", "A1",
+            "0.001", "0.002", "3", "100", "1", "5", "sheet_min_id", "MinSheet", "A1",
         ]
 
         payload = Payload.from_row_with_header(row, row_index=8, header_row=header)
@@ -174,6 +181,8 @@ class TestPayloadFromRow:
         assert payload.category_name == "Game Item"
         assert payload.game_name == "Blade Ball"
         assert payload.feedback_min == 100
+        assert payload.is_duplicate_listing_enabled is True
+        assert payload.duplicate_listing_target == 5
         assert payload.min_price_adjustment == 0.001
         assert payload.max_price_adjustment == 0.002
         assert payload.price_rounding == 3
@@ -234,7 +243,7 @@ class TestPayloadPrepareUpdate:
         assert updates == []
 
     def test_prepare_update_requirement_sheet_uses_d_e(self):
-        row = [""] * 69
+        row = [""] * 72
         row[1] = "1"
         row[2] = "TestProduct"
         payload = Payload.from_row(row, row_index=10)
@@ -250,6 +259,18 @@ class TestPayloadPrepareUpdate:
             {"range": "MySheet!D10", "values": [["Updated price"]]},
             {"range": "MySheet!E10", "values": [["2026-03-17 21:30:00"]]},
         ]
+
+    def test_duplicate_listing_helpers_normalize_values(self):
+        row = [""] * 72
+        row[1] = "1"
+        row[2] = "TestProduct"
+        row[16] = "true"
+        row[17] = "3"
+        payload = Payload.from_row(row, row_index=10)
+
+        assert payload is not None
+        assert payload.is_duplicate_listing_enabled is True
+        assert payload.duplicate_listing_target == 3
 
 
 class TestPayloadProperties:

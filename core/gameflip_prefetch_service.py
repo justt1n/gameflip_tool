@@ -10,6 +10,7 @@ from constants.gameflip_constants import (
     GAMEFLIP_DEFAULT_SEARCH_SORT,
     GAMEFLIP_PAUSED_STATUSES,
     normalize_category,
+    normalize_giftcard_product_slug_platform,
     normalize_platform,
     normalize_shop_category_slug,
     normalize_status,
@@ -26,8 +27,15 @@ from utils.price_utils import cents_to_usd_decimal
 
 
 class GameflipPrefetchService:
-    def __init__(self, client: GameflipClient):
+    def __init__(
+        self,
+        client: GameflipClient,
+        competitor_fetch_limit: int = 15,
+        seller_name_resolve_limit: int = 5,
+    ):
         self.client = client
+        self.competitor_fetch_limit = max(1, competitor_fetch_limit)
+        self.seller_name_resolve_limit = max(0, seller_name_resolve_limit)
         self._search_cache: dict[tuple, tuple[float, asyncio.Task]] = {}
         self._search_cache_lock = asyncio.Lock()
         self._search_cache_ttl_seconds = 5.0
@@ -43,8 +51,7 @@ class GameflipPrefetchService:
         if target.payload.compare_mode > 0:
             owner_id = listing.owner or await self.client.get_owner_id()
             search_result = await self._listing_search_cached(self._build_search_query(listing, target.payload))
-            seller_names = await self._resolve_seller_names(search_result.listings)
-            normalized_offers = self._normalize_competitors(
+            competitor_listings = self._filter_competitor_listings(
                 search_result.listings,
                 current_listing=listing,
                 owner_id=owner_id,
@@ -55,7 +62,15 @@ class GameflipPrefetchService:
                     target.payload.exclude_keyword or target.payload.filter_options
                 ),
                 feedback_min=target.payload.feedback_min,
+            )
+            seller_names = await self._resolve_seller_names(
+                competitor_listings[:self.seller_name_resolve_limit]
+            )
+            normalized_offers = self._normalize_competitors(
+                competitor_listings,
                 seller_names=seller_names,
+                min_price=target.payload.fetched_min_price,
+                max_price=target.payload.fetched_max_price,
             )
             competition = PreparedCompetition(
                 offers=normalized_offers,
@@ -112,10 +127,7 @@ class GameflipPrefetchService:
             if cached and now - cached[0] <= self._search_cache_ttl_seconds:
                 task = cached[1]
             else:
-                if hasattr(self.client, "listing_search_all"):
-                    task = asyncio.create_task(self.client.listing_search_all(dict(query)))
-                else:
-                    task = asyncio.create_task(self.client.listing_search(dict(query)))
+                task = asyncio.create_task(self.client.listing_search(dict(query)))
                 self._search_cache[key] = (now, task)
 
         try:
@@ -127,7 +139,7 @@ class GameflipPrefetchService:
                     self._search_cache.pop(key, None)
             raise
 
-    def _normalize_competitors(
+    def _filter_competitor_listings(
         self,
         listings: list[GameflipListing],
         current_listing: GameflipListing,
@@ -137,9 +149,8 @@ class GameflipPrefetchService:
         include_keywords: list[str],
         exclude_keywords: list[str],
         feedback_min: Optional[float],
-        seller_names: dict[str, str],
-    ) -> list[StandardCompetitorOffer]:
-        offers: list[StandardCompetitorOffer] = []
+    ) -> list[GameflipListing]:
+        filtered: list[GameflipListing] = []
         for listing in listings:
             if listing.id == current_listing.id:
                 continue
@@ -159,7 +170,20 @@ class GameflipPrefetchService:
                 continue
             if feedback_min is not None and (listing.seller_ratings or 0) <= feedback_min:
                 continue
+            filtered.append(listing)
 
+        filtered.sort(key=lambda item: cents_to_usd_decimal(item.price))
+        return filtered[:self.competitor_fetch_limit]
+
+    def _normalize_competitors(
+        self,
+        listings: list[GameflipListing],
+        seller_names: dict[str, str],
+        min_price: Optional[float],
+        max_price: Optional[float],
+    ) -> list[StandardCompetitorOffer]:
+        offers: list[StandardCompetitorOffer] = []
+        for listing in listings:
             price = cents_to_usd_decimal(listing.price)
             is_eligible = True
             note = None
@@ -169,7 +193,6 @@ class GameflipPrefetchService:
             elif max_price is not None and price > max_price:
                 is_eligible = False
                 note = "Price above max"
-
             offers.append(
                 StandardCompetitorOffer(
                     seller_name=self._seller_name(listing, seller_names),
@@ -179,8 +202,6 @@ class GameflipPrefetchService:
                     note=note,
                 )
             )
-
-        offers.sort(key=lambda item: item.price)
         return offers
 
     @staticmethod
@@ -211,7 +232,7 @@ class GameflipPrefetchService:
         query: dict[str, Any] = {
             "status": "onsale",
             "sort": GAMEFLIP_DEFAULT_SEARCH_SORT,
-            "limit": 100,
+            "limit": self.competitor_fetch_limit,
         }
         if listing.category:
             query["category"] = listing.category
@@ -305,8 +326,7 @@ class GameflipPrefetchService:
             return tuple(value)
         return value
 
-    @staticmethod
-    def _parse_compare_query(payload) -> dict[str, Any]:
+    def _parse_compare_query(self, payload) -> dict[str, Any]:
         compare_source = (payload.product_compare or "").strip()
         if not compare_source and getattr(payload, "sheet_schema", "") == "requirement":
             candidates = [
@@ -323,17 +343,27 @@ class GameflipPrefetchService:
                 return {}
 
             query = parse_qs(parsed.query)
-            path_slug = parsed.path.rstrip("/").split("/")[-1]
+            segments = [segment for segment in parsed.path.rstrip("/").split("/") if segment]
+            path_slug = segments[-1] if segments else None
             result: dict[str, Any] = {
                 "status": normalize_status(GameflipPrefetchService._first(query, "status")) or "onsale",
                 "sort": GameflipPrefetchService._first(query, "sort") or GAMEFLIP_DEFAULT_SEARCH_SORT,
-                "limit": int(GameflipPrefetchService._first(query, "limit") or 100),
+                "limit": min(
+                    int(GameflipPrefetchService._first(query, "limit") or 100),
+                    self.competitor_fetch_limit,
+                ),
             }
 
             term = GameflipPrefetchService._first(query, "term")
-            platform = normalize_platform(GameflipPrefetchService._first(query, "platform"))
             category = normalize_category((payload.category_name or "").strip()) or normalize_shop_category_slug(path_slug)
+            platform = normalize_platform(GameflipPrefetchService._first(query, "platform"))
+            if not platform and category == "GIFTCARD":
+                platform = normalize_giftcard_product_slug_platform(path_slug)
+            if not term and len(segments) >= 3:
+                term = path_slug.replace("-", " ")
+            term = GameflipPrefetchService._effective_sheet_term(payload, category, platform, term)
             tags = GameflipPrefetchService._first(query, "tags")
+            digital_region = GameflipPrefetchService._first(query, "digital_region")
             if not tags and payload.game_name and (platform or "").lower() == "roblox":
                 tags = f"roblox_game: {payload.game_name}"
 
@@ -343,6 +373,8 @@ class GameflipPrefetchService:
                 result["platform"] = platform
             if category:
                 result["category"] = category
+            if digital_region:
+                result["digital_region"] = digital_region
             if tags:
                 result["tags"] = tags
             return result
@@ -350,7 +382,7 @@ class GameflipPrefetchService:
         return {
             "status": "onsale",
             "sort": GAMEFLIP_DEFAULT_SEARCH_SORT,
-            "limit": 100,
+            "limit": self.competitor_fetch_limit,
             "term": compare_source,
             **(
                 {"tags": f"roblox_game: {payload.game_name}"}
@@ -369,6 +401,56 @@ class GameflipPrefetchService:
             return []
         normalized = value.replace(";", ",")
         return [item.strip().lower() for item in normalized.split(",") if item.strip()]
+
+    @classmethod
+    def _effective_sheet_term(
+        cls,
+        payload,
+        category: Optional[str],
+        platform: Optional[str],
+        current_term: Optional[str],
+    ) -> Optional[str]:
+        if category != "GIFTCARD":
+            return current_term
+
+        fallback_term = cls._giftcard_name_term(payload)
+        if not fallback_term:
+            return current_term
+        if not current_term:
+            return fallback_term
+        if cls._term_has_numeric_signal(current_term):
+            return current_term
+        if cls._phrase_matches(fallback_term, current_term):
+            return fallback_term
+        if platform and cls._phrase_matches(fallback_term, platform.replace("_", " ")):
+            return fallback_term
+        return current_term
+
+    @staticmethod
+    def _giftcard_name_term(payload) -> Optional[str]:
+        for candidate in ((payload.product_link or "").strip(), (payload.product_name or "").strip()):
+            if not candidate or candidate.startswith("http"):
+                continue
+            if GameflipPrefetchService._term_has_numeric_signal(candidate):
+                return candidate
+        return None
+
+    @staticmethod
+    def _term_has_numeric_signal(value: Optional[str]) -> bool:
+        return any(part.isdigit() for part in re.findall(r"[a-z0-9]+", (value or "").lower()))
+
+    @classmethod
+    def _phrase_matches(cls, text: str, phrase: Optional[str]) -> bool:
+        if not phrase:
+            return True
+        haystack = re.findall(r"[a-z0-9]+", (text or "").lower())
+        needle = re.findall(r"[a-z0-9]+", (phrase or "").lower())
+        if not needle or len(needle) > len(haystack):
+            return False
+        for index in range(len(haystack) - len(needle) + 1):
+            if haystack[index:index + len(needle)] == needle:
+                return True
+        return False
 
     @classmethod
     def _phrase_matches(cls, text: str, phrase: Optional[str]) -> bool:

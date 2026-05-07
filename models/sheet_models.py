@@ -552,11 +552,15 @@ class Payload(BaseGSheetModel):
 
     @property
     def is_duplicate_listing_enabled(self) -> bool:
+        if self.fetched_stock is not None and self.fetched_stock != 999:
+            return True
         value = (self.check_duplicate_listing_str or "").strip().lower()
         return value in {"1", "true", "on", "yes"}
 
     @property
     def duplicate_listing_target(self) -> Optional[int]:
+        if self.fetched_stock is not None and self.fetched_stock != 999:
+            return self.fetched_stock if self.fetched_stock > 0 else None
         if self.duplicate_listing is None:
             return None
         try:

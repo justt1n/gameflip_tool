@@ -272,6 +272,53 @@ class TestPayloadPrepareUpdate:
         assert payload.is_duplicate_listing_enabled is True
         assert payload.duplicate_listing_target == 3
 
+    def test_fetched_stock_overrides_duplicate_listing_target(self):
+        """fetched_stock takes priority over static duplicate_listing column."""
+        row = [""] * 72
+        row[1] = "1"
+        row[2] = "TestProduct"
+        row[16] = "true"       # check_duplicate_listing_str
+        row[17] = "3"          # duplicate_listing (static)
+        payload = Payload.from_row(row, row_index=10)
+        assert payload is not None
+
+        # Without stock: uses static duplicate_listing
+        assert payload.duplicate_listing_target == 3
+
+        # With stock: overrides static value
+        payload.fetched_stock = 5
+        assert payload.duplicate_listing_target == 5
+        assert payload.is_duplicate_listing_enabled is True
+
+        # Stock=0: target is None (no duplication)
+        payload.fetched_stock = 0
+        assert payload.duplicate_listing_target is None
+        assert payload.is_duplicate_listing_enabled is True
+
+        # Stock=999 (default/unfetched): falls back to static
+        payload.fetched_stock = 999
+        assert payload.duplicate_listing_target == 3
+
+        # Stock=None: falls back to static
+        payload.fetched_stock = None
+        assert payload.duplicate_listing_target == 3
+
+    def test_fetched_stock_enables_duplication_without_check_flag(self):
+        """Duplication enabled when stock is fetched, even without check_duplicate_listing_str."""
+        row = [""] * 28
+        row[1] = "1"
+        row[2] = "TestProduct"
+        payload = Payload.from_row(row, row_index=5)
+        assert payload is not None
+
+        # No stock, no check flag: disabled
+        assert payload.is_duplicate_listing_enabled is False
+
+        # Stock fetched: enabled even without check flag
+        payload.fetched_stock = 3
+        assert payload.is_duplicate_listing_enabled is True
+        assert payload.duplicate_listing_target == 3
+
 
 class TestPayloadProperties:
     def _make_payload(self, check="1", compare=None, min_price_str=None):

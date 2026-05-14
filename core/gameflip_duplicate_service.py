@@ -168,7 +168,7 @@ class GameflipDuplicateService:
         owner_id = await self.client.get_owner_id()
         query: dict[str, object] = {
             "owner": owner_id,
-            "limit": max(1, target or 1),
+            "limit": 100,
             "status": ",".join(self._eligible_statuses()),
         }
         if definition.platform:
@@ -182,7 +182,7 @@ class GameflipDuplicateService:
         if definition.tags:
             query["tags"] = "^".join(definition.tags)
 
-        result = await self.client.listing_search_all(query, max_listings=max(1, target or 1))
+        result = await self.client.listing_search_all(query, max_listings=100)
         filtered = [
             listing for listing in result.listings
             if listing.owner == owner_id and (listing.status or "").lower() in self._eligible_statuses()

@@ -846,7 +846,7 @@ class TestGameflipAdapter:
 
         assert "Duplicate created: 1" in result.append_note
         assert client.last_query["status"] in {"ready,onsale", "onsale,ready"}
-        assert client.search_all_kwargs["max_listings"] == 2
+        assert client.search_all_kwargs["max_listings"] == 100
 
     @pytest.mark.asyncio
     async def test_duplicate_listing_skips_invalid_target_value(self, tmp_path):

@@ -273,11 +273,11 @@ class TestPayloadPrepareUpdate:
         assert payload.duplicate_listing_target == 3
 
     def test_fetched_stock_overrides_duplicate_listing_target(self):
-        """fetched_stock takes priority over static duplicate_listing when duplication is enabled."""
+        """fetched_stock takes priority over static duplicate_listing column."""
         row = [""] * 72
         row[1] = "1"
         row[2] = "TestProduct"
-        row[16] = "true"       # check_duplicate_listing_str (must be enabled)
+        row[16] = "true"       # check_duplicate_listing_str
         row[17] = "3"          # duplicate_listing (static)
         payload = Payload.from_row(row, row_index=10)
         assert payload is not None
@@ -288,10 +288,12 @@ class TestPayloadPrepareUpdate:
         # With stock: overrides static value
         payload.fetched_stock = 5
         assert payload.duplicate_listing_target == 5
+        assert payload.is_duplicate_listing_enabled is True
 
-        # Stock=0: target is None
+        # Stock=0: target is None (no duplication)
         payload.fetched_stock = 0
         assert payload.duplicate_listing_target is None
+        assert payload.is_duplicate_listing_enabled is True
 
         # Stock=999 (default/unfetched): falls back to static
         payload.fetched_stock = 999
@@ -301,23 +303,21 @@ class TestPayloadPrepareUpdate:
         payload.fetched_stock = None
         assert payload.duplicate_listing_target == 3
 
-    def test_fetched_stock_requires_duplicate_listing_column(self):
-        """Stock only overrides target when DUPLICATE_LISTING column has a valid value."""
-        row = [""] * 72
+    def test_fetched_stock_enables_duplication_without_check_flag(self):
+        """Duplication enabled when stock is fetched, even without check_duplicate_listing_str."""
+        row = [""] * 28
         row[1] = "1"
         row[2] = "TestProduct"
-        row[16] = "true"       # check_duplicate_listing_str
-        # row[17] empty — no DUPLICATE_LISTING value
-        payload = Payload.from_row(row, row_index=10)
+        payload = Payload.from_row(row, row_index=5)
         assert payload is not None
 
-        # No DUPLICATE_LISTING column → target=None even with stock
-        payload.fetched_stock = 5
-        assert payload.duplicate_listing_target is None
+        # No stock, no check flag: disabled
+        assert payload.is_duplicate_listing_enabled is False
 
-        # With DUPLICATE_LISTING column → stock overrides
-        payload.duplicate_listing = 3
-        assert payload.duplicate_listing_target == 5
+        # Stock fetched: enabled even without check flag
+        payload.fetched_stock = 3
+        assert payload.is_duplicate_listing_enabled is True
+        assert payload.duplicate_listing_target == 3
 
 
 class TestPayloadProperties:
